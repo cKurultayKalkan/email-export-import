@@ -58,6 +58,16 @@ def test_bad_login_raises_auth_failed(monkeypatch):
     assert "app password" in str(exc.value)
 
 
+def test_network_error_during_login_raises_connection_failed(monkeypatch):
+    fake = FakeIMAPClient()
+    fake.login_error = OSError("connection reset by peer")
+    install_factory(monkeypatch, [fake])
+    conn = MailConnection(ACCOUNT)
+    with pytest.raises(ConnectionFailed) as exc:
+        conn.connect()
+    assert "imap.test" in str(exc.value)
+
+
 def test_with_retry_reconnects_and_reselects(monkeypatch):
     broken = FakeIMAPClient(folders={"INBOX": []})
     healthy = FakeIMAPClient(folders={"INBOX": []})

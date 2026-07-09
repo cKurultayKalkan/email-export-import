@@ -45,6 +45,10 @@ class MailConnection:
                 f"{self.account.host} rejected the login for {self.account.email}. "
                 "Check the email address and app password."
             ) from exc
+        except OSError as exc:
+            raise ConnectionFailed(
+                f"Connection to {self.account.host}:{self.account.port} failed during login — {exc}"
+            ) from exc
         self._client = client
         if self._selected is not None:
             folder, readonly = self._selected
