@@ -52,6 +52,15 @@ def test_append_error_injection():
         pass
 
 
+def test_append_without_msg_time_stamps_a_datetime():
+    fake = FakeIMAPClient(folders={"INBOX": []})
+    fake.append("INBOX", b"raw")
+    fake.select_folder("INBOX")
+    uid = fake.search()[0]
+    got = fake.fetch([uid], [b"INTERNALDATE"])[uid][b"INTERNALDATE"]
+    assert isinstance(got, datetime)
+
+
 def test_message_without_message_id():
     msg = make_message(uid=5, message_id=None)
     fake = FakeIMAPClient(folders={"INBOX": [msg]})

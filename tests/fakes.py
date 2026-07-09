@@ -122,7 +122,7 @@ class FakeIMAPClient:
             {
                 "uid": next(self._next_uid),
                 "flags": tuple(flags),
-                "internaldate": msg_time,
+                "internaldate": msg_time or datetime(2020, 1, 1),
                 "body": msg,
             }
         )
