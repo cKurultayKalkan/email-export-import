@@ -52,7 +52,9 @@ class MigrationState:
         f["uidvalidity"] = uidvalidity
 
     def is_migrated(self, folder: str, message_id: str | None, uid: int) -> bool:
-        f = self._folder(folder)
+        f = self._folders.get(folder)
+        if f is None:
+            return False
         if message_id is not None:
             return message_id in f["message_ids"]
         return uid in f["uids"]
@@ -75,5 +77,13 @@ class MigrationState:
                 for name, f in self._folders.items()
             }
         }
-        self.path.write_text(json.dumps(raw))
+        tmp = self.path.with_suffix(".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "w") as fh:
+                fh.write(json.dumps(raw))
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+        os.replace(tmp, self.path)
         os.chmod(self.path, 0o600)

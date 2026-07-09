@@ -1,3 +1,5 @@
+import json
+
 from email_export_import.state import MigrationState
 
 
@@ -63,3 +65,20 @@ def test_for_pair_creates_secure_paths(tmp_path):
     assert s.path == state_dir / "a@x.com__b@y.com.json"
     assert (state_dir.stat().st_mode & 0o777) == 0o700
     assert (s.path.stat().st_mode & 0o777) == 0o600
+
+
+def test_is_migrated_does_not_create_folder_entries(tmp_path):
+    path = tmp_path / "s.json"
+    s = MigrationState(path)
+    s.is_migrated("Ghost", "<a@x>", 1)
+    s.flush()
+    assert json.loads(path.read_text())["folders"] == {}
+
+
+def test_flush_is_atomic_and_keeps_0600(tmp_path):
+    path = tmp_path / "s.json"
+    s = MigrationState(path)
+    s.mark_migrated("INBOX", "<a@x>", 1)
+    s.flush()
+    assert (path.stat().st_mode & 0o777) == 0o600
+    assert not path.with_suffix(".tmp").exists()
