@@ -104,3 +104,27 @@ def test_preset_fills_host(monkeypatch, tmp_path):
     # The factory only maps "imap.gmail.com" — a zero exit code proves the
     # preset filled in the host (any other host would KeyError inside invoke).
     assert result.exit_code == 0, result.output
+
+
+def test_yes_without_host_fails_cleanly_without_prompt(tmp_path):
+    result = runner.invoke(
+        app,
+        ["--src-email", "a@x.com", "--dst-host", "dst.test", "--dst-email", "b@y.com",
+         "--yes", "--state-dir", str(tmp_path)],
+        env={"EEI_SRC_PASSWORD": "p1", "EEI_DST_PASSWORD": "p2"},
+    )
+    assert result.exit_code == 1
+    assert "required with --yes" in result.output
+    assert "Choose" not in result.output  # no preset menu leaked
+
+
+def test_yes_without_password_env_fails_cleanly(tmp_path):
+    result = runner.invoke(
+        app,
+        ["--src-host", "src.test", "--src-email", "a@x.com",
+         "--dst-host", "dst.test", "--dst-email", "b@y.com",
+         "--yes", "--state-dir", str(tmp_path)],
+        env={"EEI_DST_PASSWORD": "p2"},
+    )
+    assert result.exit_code == 1
+    assert "EEI_SRC_PASSWORD" in result.output

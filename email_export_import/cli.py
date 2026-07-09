@@ -61,7 +61,7 @@ def _gather_account(
     preset: ProviderPreset | None = None
     if preset_key is not None:
         preset = get_preset(preset_key)
-    elif host is None:
+    elif host is None and interactive:
         preset = _choose_preset(role)
 
     if preset is not None:
@@ -72,14 +72,23 @@ def _gather_account(
             console.print(f"[yellow]{preset.app_password_hint}[/yellow]")
 
     if host is None:
+        if not interactive:
+            console.print(f"[red]{role}: --host or --preset is required with --yes[/red]")
+            raise typer.Exit(code=1)
         host = Prompt.ask(f"{role} IMAP host")
     if port is None:
-        port = IntPrompt.ask(f"{role} IMAP port", default=993) if interactive else 993
+        port = 993 if not interactive else IntPrompt.ask(f"{role} IMAP port", default=993)
     if email_addr is None:
+        if not interactive:
+            console.print(f"[red]{role}: --email is required with --yes[/red]")
+            raise typer.Exit(code=1)
         email_addr = Prompt.ask(f"{role} email address")
-    password = os.environ.get(password_env) or Prompt.ask(
-        f"{role} password", password=True
-    )
+    password = os.environ.get(password_env)
+    if not password:
+        if not interactive:
+            console.print(f"[red]{role}: set {password_env} when running with --yes[/red]")
+            raise typer.Exit(code=1)
+        password = Prompt.ask(f"{role} password", password=True)
     return (
         Account(host=host, port=port, ssl=ssl, email=email_addr, password=password),
         preset,
