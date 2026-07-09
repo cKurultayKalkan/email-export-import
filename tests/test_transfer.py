@@ -153,3 +153,54 @@ def test_on_message_fires_for_every_processed_message(monkeypatch, tmp_path):
     migrate(src, dst, [FolderPlan("INBOX", "INBOX", create=False)], state,
             on_message=lambda folder, uid: seen.append((folder, uid)))
     assert seen == [("INBOX", 1), ("INBOX", 2)]
+
+
+def test_source_fetch_error_mentioning_exceeded_is_not_quota_abort(monkeypatch, tmp_path):
+    msgs = [make_message(uid=1, message_id="<a@x>"), make_message(uid=2, message_id="<b@x>")]
+    src_fake = FakeIMAPClient(folders={"INBOX": msgs})
+    dst_fake = FakeIMAPClient(folders={"INBOX": []})
+    real_fetch = src_fake.fetch
+    def flaky_fetch(uids, data):
+        if data == [b"BODY.PEEK[]"] and uids == [1]:
+            raise IMAPClientError("fetch limit exceeded")
+        return real_fetch(uids, data)
+    src_fake.fetch = flaky_fetch
+    src, dst = make_conns(monkeypatch, src_fake, dst_fake)
+    state = MigrationState(tmp_path / "s.json")
+    progress = migrate(src, dst, [FolderPlan("INBOX", "INBOX", create=False)], state)
+    assert progress.failed == 1
+    assert progress.migrated == 1
+
+
+def test_flush_failure_after_append_propagates_not_double_counts(monkeypatch, tmp_path):
+    msg = make_message(uid=1, message_id="<a@x>")
+    src_fake = FakeIMAPClient(folders={"INBOX": [msg]})
+    dst_fake = FakeIMAPClient(folders={"INBOX": []})
+    src, dst = make_conns(monkeypatch, src_fake, dst_fake)
+    state = MigrationState(tmp_path / "s.json")
+    real_flush = MigrationState.flush
+    calls = {"n": 0}
+    def flaky_flush(self):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("No space left on device")
+        return real_flush(self)
+    monkeypatch.setattr(MigrationState, "flush", flaky_flush)
+    with pytest.raises(OSError):
+        migrate(src, dst, [FolderPlan("INBOX", "INBOX", create=False)], state)
+    assert len(dst_fake.folders["INBOX"]) == 1  # appended once, not retried
+
+
+def test_vanished_uid_counts_skipped_and_fires_on_message(monkeypatch, tmp_path):
+    msg = make_message(uid=1, message_id="<a@x>")
+    src_fake = FakeIMAPClient(folders={"INBOX": [msg]})
+    dst_fake = FakeIMAPClient(folders={"INBOX": []})
+    src_fake.search = lambda criteria="ALL": [1, 99]  # 99 expunged after search
+    src, dst = make_conns(monkeypatch, src_fake, dst_fake)
+    state = MigrationState(tmp_path / "s.json")
+    seen = []
+    progress = migrate(src, dst, [FolderPlan("INBOX", "INBOX", create=False)], state,
+                       on_message=lambda folder, uid: seen.append(uid))
+    assert progress.migrated == 1
+    assert progress.skipped == 1
+    assert seen == [1, 99]

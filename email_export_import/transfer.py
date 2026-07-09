@@ -69,6 +69,11 @@ def migrate_folder(
     for uid in uids:
         m = meta.get(uid)
         if m is None:
+            # Vanished between search() and fetch() (expunged mid-run):
+            # nothing to copy, but the message was processed — count and report it.
+            progress.skipped += 1
+            if on_message is not None:
+                on_message(plan.source, uid)
             continue
         message_id = parse_message_id(m.get(_MID_KEY))
         try:
@@ -80,22 +85,31 @@ def migrate_folder(
             body = src.with_retry(lambda c: c.fetch([uid], [b"BODY.PEEK[]"]))[uid][b"BODY[]"]
             flags = preserved_flags(m.get(b"FLAGS", ()))
             internaldate = m.get(b"INTERNALDATE")
-            dst.with_retry(
-                lambda c: c.append(plan.dest, body, flags=flags, msg_time=internaldate)
-            )
-            state.mark_migrated(plan.source, message_id, uid)
-            progress.migrated += 1
-            state.flush()
+            try:
+                dst.with_retry(
+                    lambda c: c.append(plan.dest, body, flags=flags, msg_time=internaldate)
+                )
+            except Exception as exc:
+                # Quota classification applies only to the destination APPEND.
+                if is_quota_error(exc):
+                    state.flush()
+                    raise QuotaExceeded(
+                        f"Destination mailbox is full — APPEND refused: {exc}"
+                    ) from exc
+                raise
+        except QuotaExceeded:
+            raise
         except Exception as exc:
-            if is_quota_error(exc):
-                state.flush()
-                raise QuotaExceeded(
-                    f"Destination mailbox is full — APPEND refused: {exc}"
-                ) from exc
             progress.failed += 1
             progress.failures.append(
                 f"{plan.source} uid={uid} message_id={message_id}: {exc}"
             )
+        else:
+            state.mark_migrated(plan.source, message_id, uid)
+            progress.migrated += 1
+            # A flush failure here propagates: state persistence is broken and
+            # continuing would silently un-dedup every following message.
+            state.flush()
         finally:
             if on_message is not None:
                 on_message(plan.source, uid)
