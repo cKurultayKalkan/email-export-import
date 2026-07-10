@@ -138,3 +138,118 @@ def test_placeholder_without_total_shows_zero_total(tmp_path):
     state.flush()
     snap = Run.placeholder(state, state_dir=tmp_path).snapshot()
     assert snap.total == 0  # CLI-written session: M unknown, UI shows only N
+
+
+def test_cancel_after_done_keeps_done(monkeypatch, tmp_path):
+    src_data = {"INBOX": [make_message(uid=1, message_id="<m1@x>")]}
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    run = build_run(monkeypatch, tmp_path, src_data, dst)
+    run.start()
+    run.join(timeout=10)
+    assert run.snapshot().status == "done"
+    run.cancel()
+    assert run.snapshot().status == "done"  # terminal status not stomped
+
+
+def test_manager_concurrent_runs_are_independent(monkeypatch, tmp_path):
+    from email_export_import.gui.run_manager import RunManager
+
+    dst_ok = FakeIMAPClient(folders={"INBOX": []})
+    dst_bad = FakeIMAPClient(folders={"INBOX": []})
+    dst_bad.append_error = IMAPClientError("APPEND failed [OVERQUOTA]")
+
+    def factory(host, port=993, ssl=True, **kw):
+        if host == "src.test":
+            return FakeIMAPClient(
+                folders={"INBOX": [make_message(uid=1, message_id="<m1@x>")]}
+            )
+        return dst_ok if host == "dst.test" else dst_bad
+
+    monkeypatch.setattr(connection, "IMAPClient", factory)
+    c = Controller(state_dir=tmp_path)
+
+    def make_run(dst_host, dst_email, key):
+        src_conn = c.test_connection(SRC).conn
+        dst_acc = Account(host=dst_host, port=993, ssl=True, email=dst_email, password="p")
+        dst_conn = c.test_connection(dst_acc).conn
+        plan = c.build_plan(src_conn, dst_conn, skip=set())
+        state = MigrationState.for_pair("a@x", dst_email, base_dir=tmp_path)
+        return Run(key=key, title=key, src_conn=src_conn, dst_conn=dst_conn,
+                   plans=plan.plans, state=state, workers=1, total=plan.total,
+                   skip=set(), spool_enabled=False, state_dir=tmp_path)
+
+    m = RunManager(state_dir=tmp_path)
+    ok_run = make_run("dst.test", "b@y", "a@x__b@y")
+    bad_run = make_run("bad.test", "q@z", "a@x__q@z")
+    assert m.add(ok_run) and m.add(bad_run)
+    ok_run.start()
+    bad_run.start()
+    ok_run.join(timeout=10)
+    bad_run.join(timeout=10)
+
+    statuses = {s.key: s.status for s in m.snapshot_all()}
+    assert statuses["a@x__b@y"] == "done"
+    assert statuses["a@x__q@z"] == "error"
+
+
+def test_manager_duplicate_key_guard(monkeypatch, tmp_path):
+    from email_export_import.gui.run_manager import RunManager
+
+    src_data = {"INBOX": [make_message(uid=i, message_id=f"<m{i}@x>") for i in range(1, 20)]}
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    gate = threading.Event()
+    real_append = dst.append
+    dst.append = lambda f, b, flags=(), msg_time=None: (gate.wait(timeout=5), real_append(f, b, flags=flags, msg_time=msg_time))[1]
+
+    m = RunManager(state_dir=tmp_path)
+    run1 = build_run(monkeypatch, tmp_path, src_data, dst)
+    assert m.add(run1) is True
+    run1.start()
+    run2 = build_run(monkeypatch, tmp_path, src_data, dst)
+    assert m.add(run2) is False  # active run with same key
+    gate.set()
+    run1.join(timeout=10)
+    assert m.add(run2) is True  # replace once inactive
+
+
+def test_manager_load_resumable_and_remove_cancelled(tmp_path):
+    from email_export_import.gui.run_manager import RunManager
+
+    state = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+    state.set_config({"src": {"email": "a@x", "host": "h"},
+                      "dst": {"email": "b@y", "host": "h2"}, "total": 5})
+    state.flush()
+
+    m = RunManager(state_dir=tmp_path)
+    m.load_resumable()
+    assert [s.status for s in m.snapshot_all()] == ["paused"]
+
+    run = m.get("a@x__b@y")
+    run.cancel()  # placeholder → immediate terminal
+    assert run.snapshot().status == "cancelled"
+    m.remove("a@x__b@y")
+    assert m.snapshot_all() == []
+    # dismissed-cancelled stays gone across launches
+    m2 = RunManager(state_dir=tmp_path)
+    m2.load_resumable()
+    assert m2.snapshot_all() == []
+
+
+def test_manager_default_workers(monkeypatch, tmp_path):
+    from email_export_import.gui.run_manager import RunManager
+
+    src_data = {"INBOX": [make_message(uid=i, message_id=f"<m{i}@x>") for i in range(1, 20)]}
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    gate = threading.Event()
+    real_append = dst.append
+    dst.append = lambda f, b, flags=(), msg_time=None: (gate.wait(timeout=5), real_append(f, b, flags=flags, msg_time=msg_time))[1]
+
+    m = RunManager(state_dir=tmp_path)
+    assert m.default_workers() == 4
+    run = build_run(monkeypatch, tmp_path, src_data, dst)
+    m.add(run)
+    run.start()
+    assert m.default_workers() == 2
+    gate.set()
+    run.join(timeout=10)
+    assert m.default_workers() == 4
