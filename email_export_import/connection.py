@@ -8,7 +8,7 @@ from typing import Callable, TypeVar
 from imapclient import IMAPClient
 from imapclient.exceptions import IMAPClientError, LoginError
 
-from .errors import AuthFailed, ConnectionFailed
+from .errors import AuthFailed, CertificateVerifyFailed, ConnectionFailed
 from .models import Account
 
 T = TypeVar("T")
@@ -30,10 +30,22 @@ class MailConnection:
         self._selected: tuple[str, bool] | None = None  # (folder, readonly)
 
     def connect(self) -> IMAPClient:
+        kwargs = {}
+        if not self.account.verify_ssl:
+            # Encrypted but unauthenticated TLS: accepts self-signed certs.
+            ctx = ssl_module.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl_module.CERT_NONE
+            kwargs["ssl_context"] = ctx
         try:
             client = IMAPClient(
-                self.account.host, port=self.account.port, ssl=self.account.ssl
+                self.account.host, port=self.account.port, ssl=self.account.ssl, **kwargs
             )
+        except ssl_module.SSLCertVerificationError as exc:
+            raise CertificateVerifyFailed(
+                f"Could not verify the TLS certificate of "
+                f"{self.account.host}:{self.account.port} — {exc}"
+            ) from exc
         except (OSError, ssl_module.SSLError, socket.timeout) as exc:
             raise ConnectionFailed(
                 f"Could not connect to {self.account.host}:{self.account.port} — {exc}"

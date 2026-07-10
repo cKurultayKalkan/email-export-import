@@ -49,6 +49,15 @@ EEI_SRC_PASSWORD=... EEI_DST_PASSWORD=... uv run email-export-import \
   runs, not within a dropped upload.
 - **Quota:** if the destination fills up, the run aborts immediately with
   a clear message; free space and re-run to resume.
+- **Self-signed certificates:** if a server's TLS certificate cannot be
+  verified, the wizard explains the risk and asks whether to continue
+  without verification; non-interactive runs can pass
+  `--no-src-verify-ssl` / `--no-dst-verify-ssl`. The connection stays
+  encrypted but loses man-in-the-middle protection — an attacker on the
+  network could impersonate the server and capture the password. Prefer
+  fixing the server: install a properly-issued certificate, or point
+  Python at the server's CA with the `SSL_CERT_FILE` environment variable.
+  Use the flags only for servers you own on networks you trust.
 
 ## Development
 

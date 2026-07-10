@@ -17,7 +17,7 @@ from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.table import Table
 
 from .connection import MailConnection
-from .errors import MigrationError, QuotaExceeded
+from .errors import CertificateVerifyFailed, MigrationError, QuotaExceeded
 from .folders import build_folder_plan
 from .models import Account, ProviderPreset
 from .providers import PRESETS, get_preset, list_presets
@@ -57,6 +57,7 @@ def _gather_account(
     email_addr: Optional[str],
     password_env: str,
     interactive: bool,
+    verify_ssl: bool = True,
 ) -> tuple[Account, ProviderPreset | None]:
     prefix = "src" if role == "Source" else "dst"
     preset: ProviderPreset | None = None
@@ -99,19 +100,54 @@ def _gather_account(
             console.print(f"[red]{role}: set {password_env} when running with --yes[/red]")
             raise typer.Exit(code=1)
         password = Prompt.ask(f"{role} password", password=True)
+    if not verify_ssl:
+        console.print(
+            f"[yellow]{role}: SSL certificate verification disabled — the connection "
+            "is encrypted but not protected against man-in-the-middle attacks.[/yellow]"
+        )
     return (
-        Account(host=host, port=port, ssl=ssl, email=email_addr, password=password),
+        Account(
+            host=host,
+            port=port,
+            ssl=ssl,
+            email=email_addr,
+            password=password,
+            verify_ssl=verify_ssl,
+        ),
         preset,
     )
 
 
 def _connect(account: Account, role: str, interactive: bool) -> MailConnection:
+    prefix = "src" if role == "Source" else "dst"
     while True:
         conn = MailConnection(account)
         try:
             conn.connect()
             console.print(f"[green]{role}: connected to {account.host} as {account.email}[/green]")
             return conn
+        except CertificateVerifyFailed as exc:
+            console.print(f"[red]{exc}[/red]")
+            if not interactive:
+                console.print(
+                    f"[yellow]Use --no-{prefix}-verify-ssl to connect anyway "
+                    "(disables man-in-the-middle protection).[/yellow]"
+                )
+                raise typer.Exit(code=1)
+            console.print(
+                "[yellow]The server presented a certificate that cannot be verified "
+                "(often a self-signed certificate). The connection would stay encrypted, "
+                "but without verification an attacker on the network could impersonate "
+                "the server (man-in-the-middle) and capture your password. Continue only "
+                "if you trust this server and network.[/yellow]"
+            )
+            if Confirm.ask("Continue without certificate verification?", default=False):
+                account.verify_ssl = False
+                console.print(
+                    f"[yellow]{role}: SSL certificate verification disabled.[/yellow]"
+                )
+                continue
+            raise typer.Exit(code=1)
         except MigrationError as exc:
             console.print(f"[red]{exc}[/red]")
             if not interactive or not Confirm.ask("Edit connection details and retry?"):
@@ -139,11 +175,21 @@ def run(
     src_port: Optional[int] = typer.Option(None, "--src-port"),
     src_ssl: bool = typer.Option(True, "--src-ssl/--no-src-ssl"),
     src_email: Optional[str] = typer.Option(None, "--src-email"),
+    src_verify_ssl: bool = typer.Option(
+        True,
+        "--src-verify-ssl/--no-src-verify-ssl",
+        help="Verify the source server's TLS certificate (disable only for trusted self-signed servers)",
+    ),
     dst_preset: Optional[str] = typer.Option(None, "--dst-preset", help="gmail|outlook|yahoo|icloud|yandex"),
     dst_host: Optional[str] = typer.Option(None, "--dst-host"),
     dst_port: Optional[int] = typer.Option(None, "--dst-port"),
     dst_ssl: bool = typer.Option(True, "--dst-ssl/--no-dst-ssl"),
     dst_email: Optional[str] = typer.Option(None, "--dst-email"),
+    dst_verify_ssl: bool = typer.Option(
+        True,
+        "--dst-verify-ssl/--no-dst-verify-ssl",
+        help="Verify the destination server's TLS certificate (disable only for trusted self-signed servers)",
+    ),
     skip: Optional[str] = typer.Option(None, "--skip", help="Comma-separated source folders to skip (overrides preset default)"),
     yes: bool = typer.Option(False, "--yes", help="No prompts; fail instead of asking"),
     state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="Override state directory (default ~/.email-export-import)"),
@@ -152,12 +198,14 @@ def run(
     interactive = not yes
 
     src_account, src_preset_obj = _gather_account(
-        "Source", src_preset, src_host, src_port, src_ssl, src_email, SRC_PASSWORD_ENV, interactive
+        "Source", src_preset, src_host, src_port, src_ssl, src_email, SRC_PASSWORD_ENV,
+        interactive, src_verify_ssl,
     )
     src_conn = _connect(src_account, "Source", interactive)
 
     dst_account, _ = _gather_account(
-        "Destination", dst_preset, dst_host, dst_port, dst_ssl, dst_email, DST_PASSWORD_ENV, interactive
+        "Destination", dst_preset, dst_host, dst_port, dst_ssl, dst_email, DST_PASSWORD_ENV,
+        interactive, dst_verify_ssl,
     )
     dst_conn = _connect(dst_account, "Destination", interactive)
 

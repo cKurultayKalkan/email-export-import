@@ -140,3 +140,74 @@ def test_unknown_preset_fails_cleanly(tmp_path):
     )
     assert result.exit_code == 1
     assert "unknown preset 'gmial'" in result.output
+
+
+def test_cert_error_non_interactive_exits_with_hint(monkeypatch, tmp_path):
+    import ssl as ssl_mod
+
+    def factory(host, port=993, ssl=True, **kwargs):
+        raise ssl_mod.SSLCertVerificationError(
+            1, "certificate verify failed: self-signed certificate"
+        )
+
+    monkeypatch.setattr(connection, "IMAPClient", factory)
+    result = runner.invoke(
+        app,
+        base_args(["--state-dir", str(tmp_path)]),
+        env={"EEI_SRC_PASSWORD": "p1", "EEI_DST_PASSWORD": "p2"},
+    )
+    assert result.exit_code == 1
+    assert "--no-src-verify-ssl" in result.output
+
+
+def test_no_verify_ssl_flag_skips_verification(monkeypatch, tmp_path):
+    import ssl as ssl_mod
+
+    src = FakeIMAPClient(folders={"INBOX": []})
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    captured = {}
+
+    def factory(host, port=993, ssl=True, **kwargs):
+        if host == "src.test":
+            captured.update(kwargs)
+            return src
+        return dst
+
+    monkeypatch.setattr(connection, "IMAPClient", factory)
+    result = runner.invoke(
+        app,
+        base_args(["--state-dir", str(tmp_path), "--no-src-verify-ssl"]),
+        env={"EEI_SRC_PASSWORD": "p1", "EEI_DST_PASSWORD": "p2"},
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["ssl_context"].verify_mode == ssl_mod.CERT_NONE
+    assert "verification disabled" in result.output
+
+
+def test_wizard_offers_retry_without_verification(monkeypatch, tmp_path):
+    import ssl as ssl_mod
+
+    src = FakeIMAPClient(folders={"INBOX": []})
+    dst = FakeIMAPClient(folders={"INBOX": []})
+
+    def factory(host, port=993, ssl=True, **kwargs):
+        if host == "src.test":
+            if "ssl_context" not in kwargs:
+                raise ssl_mod.SSLCertVerificationError(
+                    1, "certificate verify failed: self-signed certificate"
+                )
+            return src
+        return dst
+
+    monkeypatch.setattr(connection, "IMAPClient", factory)
+    result = runner.invoke(
+        app,
+        ["--src-host", "src.test", "--src-port", "993", "--src-email", "a@x.com",
+         "--dst-host", "dst.test", "--dst-port", "993", "--dst-email", "b@y.com",
+         "--state-dir", str(tmp_path)],
+        env={"EEI_SRC_PASSWORD": "p1", "EEI_DST_PASSWORD": "p2"},
+        input="y\ny\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "man-in-the-middle" in result.output
+    assert "verification disabled" in result.output

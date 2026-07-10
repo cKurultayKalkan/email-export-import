@@ -25,6 +25,7 @@ class Account:
     ssl: bool
     email: str
     password: str
+    verify_ssl: bool = True
 
 
 @dataclass

@@ -117,3 +117,51 @@ def test_close_is_idempotent(monkeypatch):
     conn.close()
     conn.close()
     assert not fake.logged_in
+
+
+def test_cert_verify_failure_raises_specific_error(monkeypatch):
+    import ssl as ssl_mod
+
+    from email_export_import.errors import CertificateVerifyFailed
+
+    install_factory(
+        monkeypatch,
+        [ssl_mod.SSLCertVerificationError(1, "certificate verify failed: self-signed certificate")],
+    )
+    conn = MailConnection(ACCOUNT)
+    with pytest.raises(CertificateVerifyFailed) as exc:
+        conn.connect()
+    assert "imap.test" in str(exc.value)
+
+
+def test_no_verify_ssl_uses_relaxed_context(monkeypatch):
+    import ssl as ssl_mod
+
+    fake = FakeIMAPClient()
+    captured = {}
+
+    def factory(host, port=993, ssl=True, **kwargs):
+        captured.update(kwargs)
+        return fake
+
+    monkeypatch.setattr(connection, "IMAPClient", factory)
+    account = Account(
+        host="imap.test", port=993, ssl=True, email="a@x", password="p", verify_ssl=False
+    )
+    MailConnection(account).connect()
+    ctx = captured["ssl_context"]
+    assert ctx.verify_mode == ssl_mod.CERT_NONE
+    assert ctx.check_hostname is False
+
+
+def test_verify_ssl_default_passes_no_custom_context(monkeypatch):
+    fake = FakeIMAPClient()
+    captured = {}
+
+    def factory(host, port=993, ssl=True, **kwargs):
+        captured.update(kwargs)
+        return fake
+
+    monkeypatch.setattr(connection, "IMAPClient", factory)
+    MailConnection(ACCOUNT).connect()
+    assert "ssl_context" not in captured
