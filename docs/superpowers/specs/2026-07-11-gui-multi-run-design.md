@@ -32,7 +32,7 @@ blocking work off the UI thread and decouples runs from screens.
 |---|---|
 | Concurrency | Multiple migrations run truly concurrently, all shown on a dashboard. |
 | Pause semantics | Pause = graceful stop (workers finish current message, connections close, state flushed). Resume = reconnect and continue from disk state (done messages skipped). No true mid-message freeze. |
-| Rate limiting | With more than one run active, per-run worker default drops 4→2 to cap total connection pressure; user can override. |
+| Rate limiting | Evaluated once at Run start: if another run is already `running`, the plan screen's worker **default** is 2 instead of 4 (an explicit user selection always wins). |
 | State/spool | Unchanged; same files as the CLI, shared and resumable across CLI/GUI. |
 
 ## Architecture
@@ -71,10 +71,20 @@ lock-guarded counters. Deliberately Flet-free.
   UI's job before calling), then `start()` again over the same state; dedup
   skips done messages.
 - `cancel()` — set the cancel event with `_pausing=False`; terminal status
-  `cancelled`; state remains on disk but the run is removed from the active
-  dashboard on user dismissal.
+  `cancelled`. Dismissing a cancelled run calls `state.mark_cancelled()` so it
+  stops reappearing as resumable on the next launch (see State addition below).
 - `snapshot() -> RunSnapshot` — thread-safe: `key, title, status, processed,
   total, current_folder, error_kind, error_message, result, spool_pending`.
+- `start()` also writes `"total": total` into the session config so a later
+  launch can show `N/M` on a paused card. Sessions written by the CLI (no
+  `total` key) show only "N messages already moved".
+
+### State addition (single, minimal)
+
+`MigrationState` gains `mark_cancelled()` (sets `status = "cancelled"`), and
+`list_resumable` excludes both `completed` and `cancelled`. This is the only
+change outside `gui/` — the migration engine, spool, and all other state
+semantics are untouched.
 
 ### `RunManager` (in `run_manager.py`)
 
@@ -104,18 +114,27 @@ Keeps blocking IMAP work off the UI thread.
 
 ## Screens
 
-1. **Dashboard (home).** One card per run: source→destination title, status
-   badge (running / paused / done / error), inline progress bar + `N/M` counter.
-   Card actions by status: running → Pause, Cancel, Detail; paused → Resume,
-   Cancel, Detail; done/error → Detail, Dismiss. A "+ New migration" button opens
-   the wizard. A single app-level background poll (~200 ms) refreshes every card
-   from `RunManager.snapshot_all()`; the dashboard is always current when shown.
+1. **Dashboard (home).** Replaces the old welcome screen entirely (the
+   welcome-screen resume list moves here as paused cards). One card per run:
+   source→destination title, status badge (running / paused / done / error),
+   inline progress bar + `N/M` counter. Card actions by status: running →
+   Pause, Cancel, Detail; paused → Resume, Cancel, Detail; done/error →
+   Detail, Dismiss. A "+ New migration" button opens the wizard. A single
+   app-level background poll (~200 ms) refreshes every card from
+   `RunManager.snapshot_all()`; the dashboard is always current when shown.
+   **Resume flow:** the Resume button opens a small password dialog (source +
+   destination, env-var fallback honored), then reconnects via `async_ops`
+   (spinner on the card, cert dialog possible here too) and starts the run.
 2. **Wizard (source → destination → plan).** The existing flow, but every
    blocking step goes through `async_ops`: "Test connection" shows a spinner,
    runs off-thread, then advances / shows a field error / opens the certificate
    dialog. Plan building is off-thread too. Finishing the wizard creates a Run,
    adds it to the manager, starts it, and returns to the dashboard (the run
-   continues there).
+   continues there). **Duplicate-key guard:** if a Run for the same
+   source/destination pair already exists, the wizard's final step does not
+   create a second one — it returns to the dashboard with that card
+   highlighted (running/paused runs continue; the user acts on the existing
+   card).
 3. **Detail.** One run's large progress view: bar, `N/M`, current folder,
    failure list, and status-appropriate actions (Pause/Resume/Cancel). Reached
    from a card's Detail button; Back returns to the dashboard with the run still
@@ -171,4 +190,5 @@ poll only (page closed), never the runs.
 ## Out of scope (v1)
 
 True mid-message pause; shared connection pooling across runs; mobile; changes
-to the migration engine, state, or spool modules.
+to the migration engine or spool modules (the sole exception is the
+`mark_cancelled` state addition described above).
