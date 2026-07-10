@@ -8,6 +8,7 @@ from ..connection import MailConnection
 from ..errors import AuthFailed, CertificateVerifyFailed, ConnectionFailed, QuotaExceeded
 from ..folders import build_folder_plan
 from ..models import Account, FolderPlan, TransferProgress
+from ..providers import get_preset
 from ..state import MigrationState
 from ..transfer import migrate
 
@@ -57,6 +58,16 @@ class Controller:
 
     def list_sessions(self) -> list[MigrationState]:
         return MigrationState.list_resumable(base_dir=self.state_dir)
+
+    @staticmethod
+    def default_skip(preset_key: str | None) -> set[str]:
+        """A source preset's default skip set (e.g. Gmail's duplicate label views)."""
+        if preset_key is None:
+            return set()
+        try:
+            return set(get_preset(preset_key).skip_folders)
+        except KeyError:
+            return set()
 
     def test_connection(self, account: Account) -> ConnectionResult:
         conn = MailConnection(account)

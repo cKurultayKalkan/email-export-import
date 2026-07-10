@@ -136,7 +136,10 @@ def build_account(
             alignment=ft.MainAxisAlignment.END,
         ),
     ]
-    return ft.View(route=f"/{role}", controls=controls, padding=24, spacing=12), {"account": account}
+    return ft.View(route=f"/{role}", controls=controls, padding=24, spacing=12), {
+        "account": account,
+        "preset_key": lambda: preset_dd.value if preset_dd.value != custom_key else None,
+    }
 
 
 def build_plan(

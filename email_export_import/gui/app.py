@@ -80,6 +80,12 @@ def _page_main(page: ft.Page) -> None:
                 status.update()
                 if role == "source":
                     ws.src_account, ws.src_conn = account, result.conn
+                    if ws.resume_session is None:
+                        # New migration: seed the skip list from the source
+                        # preset (e.g. Gmail's duplicate label views) so it
+                        # doesn't have to be discovered the hard way — a
+                        # doubled mailbox. Resume keeps its saved skip list.
+                        ws.skip = controller.default_skip(handles["preset_key"]())
                     go_account("dest")
                 else:
                     ws.dst_account, ws.dst_conn = account, result.conn
@@ -110,7 +116,7 @@ def _page_main(page: ft.Page) -> None:
         def on_back() -> None:
             go_welcome() if role == "source" else go_account("source")
 
-        view, _handles = views.build_account(i18n, role, initial, on_test, on_back, status)
+        view, handles = views.build_account(i18n, role, initial, on_test, on_back, status)
         page.views.clear()
         page.views.append(view)
         page.update()

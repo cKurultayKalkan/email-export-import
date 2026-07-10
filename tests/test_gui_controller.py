@@ -225,6 +225,13 @@ def test_snapshot_polls_during_live_run(monkeypatch, tmp_path):
     assert c.snapshot().result.migrated == 5
 
 
+def test_default_skip_for_gmail_and_custom(tmp_path):
+    c = Controller(state_dir=tmp_path)
+    assert "[Gmail]/All Mail" in c.default_skip("gmail")
+    assert c.default_skip(None) == set()
+    assert c.default_skip("nonexistent") == set()
+
+
 def test_runner_with_parallel_workers(monkeypatch, tmp_path):
     src_data = {
         "A": [make_message(uid=i, message_id=f"<a{i}@x>") for i in range(1, 8)],
