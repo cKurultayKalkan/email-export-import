@@ -54,7 +54,7 @@ def build_welcome(
         body.append(ft.Text(i18n.t("welcome.resume_heading"), weight=ft.FontWeight.BOLD))
         body.extend(rows)
     body.append(ft.FilledButton(i18n.t("welcome.new"), on_click=lambda e: on_new()))
-    return ft.View("/", body, padding=24, spacing=16)
+    return ft.View(route="/", controls=body, padding=24, spacing=16)
 
 
 def build_account(
@@ -99,14 +99,30 @@ def build_account(
     if initial.get("preset"):
         preset_changed()
 
-    def account() -> Account:
+    def parse_port() -> int | None:
+        try:
+            value = int(port.value or 993)
+        except ValueError:
+            return None
+        return value if 1 <= value <= 65535 else None
+
+    def account(port_value: int) -> Account:
         return Account(
             host=host.value.strip(),
-            port=int(port.value or 993),
+            port=port_value,
             ssl=bool(use_ssl.value),
             email=email.value.strip(),
             password=password.value,
         )
+
+    def _test_clicked(e) -> None:
+        p = parse_port()
+        if p is None:
+            port.error_text = i18n.t("account.port_invalid")
+            port.update()
+            return
+        port.error_text = None
+        on_test(account(p))
 
     controls = [
         ft.Text(i18n.t(f"account.{'source' if role == 'source' else 'dest'}_title"),
@@ -115,12 +131,12 @@ def build_account(
         ft.Row(
             [
                 ft.TextButton(i18n.t("account.back"), on_click=lambda e: on_back()),
-                ft.FilledButton(i18n.t("account.test"), on_click=lambda e: on_test(account())),
+                ft.FilledButton(i18n.t("account.test"), on_click=_test_clicked),
             ],
             alignment=ft.MainAxisAlignment.END,
         ),
     ]
-    return ft.View(f"/{role}", controls, padding=24, spacing=12), {"account": account}
+    return ft.View(route=f"/{role}", controls=controls, padding=24, spacing=12), {"account": account}
 
 
 def build_plan(
@@ -167,8 +183,8 @@ def build_plan(
         on_select=lambda e: on_workers(int(e.control.value)),
     )
     return ft.View(
-        "/plan",
-        [
+        route="/plan",
+        controls=[
             ft.Text(i18n.t("plan.title"), size=18, weight=ft.FontWeight.BOLD),
             ft.Column([table], scroll=ft.ScrollMode.AUTO, expand=True),
             ft.Row([workers_dd, ft.Text(i18n.t("plan.total", count=selected_total))]),
@@ -192,8 +208,8 @@ def build_progress(
     counter = ft.Text("0 / 0")
     folder = ft.Text("")
     view = ft.View(
-        "/progress",
-        [
+        route="/progress",
+        controls=[
             ft.Text(i18n.t("progress.title"), size=18, weight=ft.FontWeight.BOLD),
             bar, counter, folder,
             ft.Row(
@@ -239,4 +255,4 @@ def build_done(
             )
     controls.append(ft.Text(i18n.t("done.resume_hint"), size=12))
     controls.append(ft.FilledButton(i18n.t("done.close"), on_click=lambda e: on_close()))
-    return ft.View("/done", controls, padding=24, spacing=12)
+    return ft.View(route="/done", controls=controls, padding=24, spacing=12)

@@ -11,6 +11,7 @@
   "account.custom": "Custom (enter server manually)",
   "account.host": "IMAP server",
   "account.port": "Port",
+  "account.port_invalid": "Enter a valid port number (1–65535)",
   "account.ssl": "Use SSL/TLS",
   "account.email": "Email address",
   "account.password": "Password",

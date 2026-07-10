@@ -11,6 +11,7 @@
   "account.custom": "Özel (sunucuyu elle girin)",
   "account.host": "IMAP sunucusu",
   "account.port": "Port",
+  "account.port_invalid": "Geçerli bir port numarası girin (1–65535)",
   "account.ssl": "SSL/TLS kullan",
   "account.email": "E-posta adresi",
   "account.password": "Parola",

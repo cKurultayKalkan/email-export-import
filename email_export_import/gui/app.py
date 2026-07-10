@@ -167,8 +167,8 @@ def _page_main(page: ft.Page) -> None:
                 folder.value = snap.current_folder or ""
                 try:
                     bar.update(); counter.update(); folder.update()
-                except Exception:
-                    return  # page closed
+                except RuntimeError:
+                    return  # page closed / controls unmounted
                 if not snap.running:
                     page.views.clear()
                     page.views.append(views.build_done(i18n, snap, on_close=close_window))
