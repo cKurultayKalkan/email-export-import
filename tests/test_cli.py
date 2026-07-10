@@ -206,7 +206,7 @@ def test_wizard_offers_retry_without_verification(monkeypatch, tmp_path):
          "--dst-host", "dst.test", "--dst-port", "993", "--dst-email", "b@y.com",
          "--state-dir", str(tmp_path)],
         env={"EEI_SRC_PASSWORD": "p1", "EEI_DST_PASSWORD": "p2"},
-        input="y\ny\n",
+        input="y\n\ny\n",  # retry w/o verification, spool default, start
     )
     assert result.exit_code == 0, result.output
     assert "man-in-the-middle" in result.output
@@ -239,7 +239,7 @@ def test_dst_email_prompt_defaults_to_src_email(monkeypatch, tmp_path):
          "--dst-host", "dst.test", "--dst-port", "993",
          "--state-dir", str(tmp_path)],
         env={"EEI_SRC_PASSWORD": "p1", "EEI_DST_PASSWORD": "p2"},
-        input="\ny\n",
+        input="\n\ny\n",  # dst email default, spool default, start
     )
     assert result.exit_code == 0, result.output
     assert "connected to dst.test as a@x.com" in result.output
@@ -360,6 +360,44 @@ def test_resume_reports_already_migrated_count(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.output
     assert "already migrated" in result.output
     assert len(dst.folders["INBOX"]) == 0  # deduped, not re-uploaded
+
+
+def test_spool_flag_saved_and_spool_dir_used(monkeypatch, tmp_path):
+    from email_export_import.state import MigrationState
+
+    src = FakeIMAPClient(folders={"INBOX": [make_message(uid=1, message_id="<a@x>")]})
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    install_hosts(monkeypatch, {"src.test": src, "dst.test": dst})
+
+    result = runner.invoke(
+        app,
+        base_args(["--state-dir", str(tmp_path), "--spool"]),
+        env={"EEI_SRC_PASSWORD": "p1", "EEI_DST_PASSWORD": "p2"},
+    )
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "spool" / "a@x.com__b@y.com").is_dir()
+
+    saved = MigrationState.for_pair("a@x.com", "b@y.com", base_dir=tmp_path)
+    assert saved.config["spool"] is True
+
+
+def test_spool_default_off(monkeypatch, tmp_path):
+    from email_export_import.state import MigrationState
+
+    src = FakeIMAPClient(folders={"INBOX": [make_message(uid=1, message_id="<a@x>")]})
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    install_hosts(monkeypatch, {"src.test": src, "dst.test": dst})
+
+    result = runner.invoke(
+        app,
+        base_args(["--state-dir", str(tmp_path)]),
+        env={"EEI_SRC_PASSWORD": "p1", "EEI_DST_PASSWORD": "p2"},
+    )
+    assert result.exit_code == 0, result.output
+    assert not (tmp_path / "spool").exists()
+
+    saved = MigrationState.for_pair("a@x.com", "b@y.com", base_dir=tmp_path)
+    assert saved.config["spool"] is False
 
 
 def test_planning_survives_dropped_source_connection(monkeypatch, tmp_path):

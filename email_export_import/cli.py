@@ -22,6 +22,7 @@ from .errors import CertificateVerifyFailed, MigrationError, QuotaExceeded
 from .folders import build_folder_plan
 from .models import Account, ProviderPreset
 from .providers import PRESETS, get_preset, list_presets
+from .spool import MessageSpool
 from .state import MigrationState
 from .transfer import migrate
 
@@ -270,6 +271,13 @@ def run(
         max=16,
         help="Parallel IMAP connections (mind provider connection limits; 1 = serial)",
     ),
+    spool: Optional[bool] = typer.Option(
+        None,
+        "--spool/--no-spool",
+        help="Keep each downloaded message on disk until it is uploaded, so failed "
+        "uploads retry from disk without re-downloading (default: off — messages "
+        "stream through memory and never touch disk)",
+    ),
     yes: bool = typer.Option(False, "--yes", help="No prompts; fail instead of asking"),
     state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="Override state directory (default ~/.email-export-import)"),
 ) -> None:
@@ -291,6 +299,7 @@ def run(
         dst_account = _account_from_config(cfg["dst"], DST_PASSWORD_ENV, "Destination")
         skip_set = set(cfg.get("skip", []))
         workers = cfg.get("workers", workers)
+        use_spool = cfg.get("spool", False) if spool is None else spool
         src_conn = _connect(src_account, "Source", interactive)
         dst_conn = _connect(dst_account, "Destination", interactive)
     else:
@@ -318,6 +327,16 @@ def run(
             skip_set = {s.strip() for s in raw.split(",") if s.strip()}
         else:
             skip_set = default_skip
+
+        # Default is streaming through memory; the disk spool is opt-in
+        # because it costs disk space and most runs never need it.
+        if spool is None and interactive:
+            spool = Confirm.ask(
+                "Keep downloaded messages on disk until uploaded "
+                "(failed uploads then retry without re-downloading)?",
+                default=False,
+            )
+        use_spool = bool(spool)
 
     # Planning runs after the user spent time in prompts — either session may
     # have idled out server-side, so every planning call goes through with_retry.
@@ -353,9 +372,16 @@ def run(
             "dst": _account_config(dst_account),
             "skip": sorted(skip_set),
             "workers": workers,
+            "spool": use_spool,
         }
     )
     state.flush()
+
+    message_spool = (
+        MessageSpool.for_pair(src_account.email, dst_account.email, base_dir=state_dir)
+        if use_spool
+        else None
+    )
 
     already_done = state.migrated_count()
     if already_done:
@@ -384,6 +410,7 @@ def run(
                     task, advance=1, description=folder
                 ),
                 workers=workers,
+                spool=message_spool,
             )
     except KeyboardInterrupt:
         console.print("[yellow]Interrupted — progress saved. Run again with the same accounts to resume.[/yellow]")
@@ -415,4 +442,9 @@ def run(
         console.print(
             "[yellow]Progress saved — run again and pick this session to "
             "retry the failed messages.[/yellow]"
+        )
+    if message_spool is not None and message_spool.pending_count():
+        console.print(
+            f"[dim]{message_spool.pending_count()} downloaded messages are kept "
+            f"in {message_spool.path} — the retry will upload them from disk.[/dim]"
         )

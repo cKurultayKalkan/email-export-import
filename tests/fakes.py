@@ -65,6 +65,8 @@ class FakeIMAPClient:
         self.login_error: Exception | None = None
         self._next_uid = itertools.count(1000)
         self.select_calls: list[str] = []
+        self.subscribed: set[str] = set()
+        self.body_fetches: list[int] = []  # uids whose full body was fetched
 
     # --- session ---------------------------------------------------------
     def login(self, user: str, password: str) -> None:
@@ -102,6 +104,9 @@ class FakeIMAPClient:
     def folder_status(self, name: str, what=None) -> dict:
         return {b"MESSAGES": len(self.folders[name])}
 
+    def subscribe_folder(self, name: str) -> None:
+        self.subscribed.add(name)
+
     # --- messages --------------------------------------------------------
     def search(self, criteria="ALL"):
         return [m["uid"] for m in self.folders[self.selected]]
@@ -123,6 +128,7 @@ class FakeIMAPClient:
                     entry[b"BODY[HEADER.FIELDS (MESSAGE-ID)]"] = self._mid_blob(m["body"])
                 elif item == b"BODY.PEEK[]":
                     entry[b"BODY[]"] = m["body"]
+                    self.body_fetches.append(m["uid"])
             result[m["uid"]] = entry
         return result
 

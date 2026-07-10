@@ -68,6 +68,63 @@ def test_roundtrip_preserves_body_flags_date(monkeypatch, tmp_path):
     assert stored["internaldate"] == when
 
 
+def test_destination_folders_are_subscribed(monkeypatch, tmp_path):
+    """Roundcube-style webmail lists only SUBSCRIBEd folders — a created but
+    unsubscribed folder full of migrated mail looks like a failed migration."""
+    src_fake = FakeIMAPClient(folders={"INBOX": [], "Yeni": []})
+    dst_fake = FakeIMAPClient(folders={"INBOX": []})
+    src, dst = make_conns(monkeypatch, src_fake, dst_fake)
+    state = MigrationState(tmp_path / "s.json")
+
+    migrate(src, dst, [
+        FolderPlan("INBOX", "INBOX", create=False),
+        FolderPlan("Yeni", "INBOX.Yeni", create=True),
+    ], state)
+
+    assert "INBOX.Yeni" in dst_fake.subscribed  # newly created
+    assert "INBOX" in dst_fake.subscribed  # pre-existing but maybe unsubscribed
+
+
+def test_spool_reuploads_from_disk_without_redownload(monkeypatch, tmp_path):
+    from email_export_import.spool import MessageSpool
+
+    msg = make_message(uid=1, message_id="<m1@x>")
+    src_fake = FakeIMAPClient(folders={"INBOX": [msg]})
+    dst_fake = FakeIMAPClient(folders={"INBOX": []})
+    dst_fake.append_error = IMAPClientError("APPEND refused")
+    src, dst = make_conns(monkeypatch, src_fake, dst_fake)
+    state = MigrationState(tmp_path / "s.json")
+    spool = MessageSpool(tmp_path / "spool")
+    plans = [FolderPlan("INBOX", "INBOX", create=False)]
+
+    first = migrate(src, dst, plans, state, spool=spool)
+    assert first.failed == 1
+    assert spool.pending_count() == 1  # downloaded body survived the failure
+
+    dst_fake.append_error = None
+    src_fake.body_fetches.clear()
+    second = migrate(src, dst, plans, state, spool=spool)
+    assert second.migrated == 1
+    assert src_fake.body_fetches == []  # uploaded from disk, not re-downloaded
+    assert dst_fake.folders["INBOX"][0]["body"] == msg["body"]
+    assert spool.pending_count() == 0  # discarded after successful upload
+
+
+def test_spool_discarded_on_clean_run(monkeypatch, tmp_path):
+    from email_export_import.spool import MessageSpool
+
+    src_fake = FakeIMAPClient(folders={"INBOX": [make_message(uid=1, message_id="<m1@x>")]})
+    dst_fake = FakeIMAPClient(folders={"INBOX": []})
+    src, dst = make_conns(monkeypatch, src_fake, dst_fake)
+    state = MigrationState(tmp_path / "s.json")
+    spool = MessageSpool(tmp_path / "spool")
+
+    progress = migrate(src, dst, [FolderPlan("INBOX", "INBOX", create=False)], state, spool=spool)
+
+    assert progress.migrated == 1
+    assert spool.pending_count() == 0
+
+
 def test_rerun_skips_everything(monkeypatch, tmp_path):
     msgs = [make_message(uid=i, message_id=f"<m{i}@x>") for i in (1, 2)]
     src_fake = FakeIMAPClient(folders={"INBOX": msgs})

@@ -8,6 +8,7 @@ from typing import Callable
 from .connection import MailConnection
 from .errors import QuotaExceeded
 from .models import FolderPlan, TransferProgress
+from .spool import MessageSpool
 from .state import MigrationState
 
 # Flags copied to the destination. \Recent is server-managed (RFC 3501) and
@@ -75,6 +76,14 @@ def _plan_units(
                     else c.create_folder(dest)
                 )
 
+            # Roundcube-style webmail lists only SUBSCRIBEd folders — an
+            # unsubscribed folder full of migrated mail looks like a failed
+            # migration. Best-effort: never fail the folder over it.
+            try:
+                dst.with_retry(lambda c, dest=plan.dest: c.subscribe_folder(dest))
+            except Exception:
+                pass
+
             uids = src.with_retry(lambda c: c.search())
         except Exception as exc:
             progress.failed += 1
@@ -95,6 +104,7 @@ def _process_unit(
     lock: threading.Lock,
     stop: threading.Event,
     on_message: MessageCallback | None,
+    spool: MessageSpool | None = None,
 ) -> None:
     """Migrate one chunk of UIDs. State and progress mutations are guarded by
     *lock*; network transfers run outside it so workers overlap on the wire."""
@@ -124,9 +134,19 @@ def _process_unit(
                 continue
             # Bodies fetched one at a time and released each iteration, so a
             # 50 MB attachment costs 50 MB, not the whole folder.
-            body = src.with_retry(lambda c: c.fetch([uid], [b"BODY.PEEK[]"]))[uid][b"BODY[]"]
-            flags = preserved_flags(m.get(b"FLAGS", ()))
-            internaldate = m.get(b"INTERNALDATE")
+            spooled = (
+                spool.get(plan.source, uid, message_id) if spool is not None else None
+            )
+            if spooled is not None:
+                body = spooled.body
+                flags = spooled.flags
+                internaldate = spooled.internaldate
+            else:
+                body = src.with_retry(lambda c: c.fetch([uid], [b"BODY.PEEK[]"]))[uid][b"BODY[]"]
+                flags = preserved_flags(m.get(b"FLAGS", ()))
+                internaldate = m.get(b"INTERNALDATE")
+                if spool is not None:
+                    spool.put(plan.source, uid, message_id, body, flags, internaldate)
             try:
                 dst.with_retry(
                     lambda c: c.append(plan.dest, body, flags=flags, msg_time=internaldate)
@@ -155,6 +175,8 @@ def _process_unit(
                 # A flush failure here propagates: state persistence is broken and
                 # continuing would silently un-dedup every following message.
                 state.flush()
+            if spool is not None:
+                spool.discard(plan.source, uid)
         finally:
             if on_message is not None:
                 on_message(plan.source, uid)
@@ -168,6 +190,7 @@ def migrate(
     on_message: MessageCallback | None = None,
     workers: int = 1,
     cancel: threading.Event | None = None,
+    spool: MessageSpool | None = None,
 ) -> TransferProgress:
     progress = TransferProgress()
     lock = threading.Lock()
@@ -179,7 +202,7 @@ def migrate(
 
         if workers <= 1:
             for plan, uids in units:
-                _process_unit(src, dst, plan, uids, state, progress, lock, stop, on_message)
+                _process_unit(src, dst, plan, uids, state, progress, lock, stop, on_message, spool)
             return progress
 
         # Each worker owns a private connection pair (IMAP sessions are not
@@ -199,7 +222,7 @@ def migrate(
                     except queue.Empty:
                         return
                     _process_unit(
-                        wsrc, wdst, plan, uids, state, progress, lock, stop, on_message
+                        wsrc, wdst, plan, uids, state, progress, lock, stop, on_message, spool
                     )
             except Exception as exc:
                 stop.set()

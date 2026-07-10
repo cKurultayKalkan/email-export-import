@@ -59,6 +59,16 @@ finish it in the other. Turkish and English UI.
   case a connection drops in the middle of a single upload, that one
   message may be duplicated — the resume state prevents duplicates across
   runs, not within a dropped upload.
+- **Disk spool (optional):** by default messages stream through memory —
+  nothing is written to disk. With `--spool` (or answering yes in the
+  wizard) each downloaded message is kept in
+  `~/.email-export-import/spool/` until its upload succeeds, so failed
+  uploads are retried from disk on the next run without re-downloading.
+  The spool only ever holds messages whose upload failed; a clean run
+  leaves it empty.
+- **Folder visibility:** created destination folders are also SUBSCRIBEd —
+  webmail like Roundcube only lists subscribed folders, so without this a
+  migrated folder existed but stayed invisible.
 - **Quota:** if the destination fills up, the run aborts immediately with
   a clear message; free space and re-run to resume.
 - **Speed:** the transfer runs on 4 parallel IMAP connections by default;
