@@ -11,6 +11,10 @@ dependencies = [
 
 [project.scripts]
 email-export-import = "email_export_import.cli:app"
+email-export-import-gui = "email_export_import.gui.app:main"
+
+[project.optional-dependencies]
+gui = ["flet>=0.25,<1.0"]
 
 [dependency-groups]
 dev = ["pytest>=8.0"]
