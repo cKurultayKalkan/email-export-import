@@ -313,3 +313,51 @@ def test_workers_one_uses_existing_connections(monkeypatch, tmp_path):
     state = MigrationState(tmp_path / "s.json")
     progress = migrate(src, dst, [FolderPlan("INBOX", "INBOX", create=False)], state)
     assert progress.migrated == 1
+
+
+def test_cancel_preset_stops_before_any_message(monkeypatch, tmp_path):
+    import threading
+
+    msgs = [make_message(uid=i, message_id=f"<m{i}@x>") for i in (1, 2)]
+    src_fake = FakeIMAPClient(folders={"INBOX": msgs})
+    dst_fake = FakeIMAPClient(folders={"INBOX": []})
+    src, dst = make_conns(monkeypatch, src_fake, dst_fake)
+    state = MigrationState(tmp_path / "s.json")
+
+    cancel = threading.Event()
+    cancel.set()
+    progress = migrate(src, dst, [FolderPlan("INBOX", "INBOX", create=False)],
+                       state, cancel=cancel)
+    assert progress.migrated == 0
+    assert len(dst_fake.folders["INBOX"]) == 0
+
+
+def test_cancel_mid_run_keeps_state_resumable(monkeypatch, tmp_path):
+    import threading
+
+    msgs = [make_message(uid=i, message_id=f"<m{i}@x>") for i in range(1, 6)]
+    src_fake = FakeIMAPClient(folders={"INBOX": msgs})
+    dst_fake = FakeIMAPClient(folders={"INBOX": []})
+    src, dst = make_conns(monkeypatch, src_fake, dst_fake)
+    state_path = tmp_path / "s.json"
+
+    cancel = threading.Event()
+    seen = []
+
+    def cancel_after_two(folder, uid):
+        seen.append(uid)
+        if len(seen) == 2:
+            cancel.set()
+
+    progress = migrate(src, dst, [FolderPlan("INBOX", "INBOX", create=False)],
+                       MigrationState(state_path), on_message=cancel_after_two,
+                       cancel=cancel)
+    assert progress.migrated == 2
+    assert len(dst_fake.folders["INBOX"]) == 2
+
+    # Resume completes the rest exactly once — cancel behaved like Ctrl-C.
+    progress2 = migrate(src, dst, [FolderPlan("INBOX", "INBOX", create=False)],
+                        MigrationState(state_path))
+    assert progress2.migrated == 3
+    assert progress2.skipped == 2
+    assert len(dst_fake.folders["INBOX"]) == 5

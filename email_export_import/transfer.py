@@ -167,10 +167,11 @@ def migrate(
     state: MigrationState,
     on_message: MessageCallback | None = None,
     workers: int = 1,
+    cancel: threading.Event | None = None,
 ) -> TransferProgress:
     progress = TransferProgress()
     lock = threading.Lock()
-    stop = threading.Event()
+    stop = cancel if cancel is not None else threading.Event()
     try:
         units = _plan_units(src, dst, plans, state, progress)
         if not units:
