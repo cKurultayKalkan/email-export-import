@@ -32,6 +32,16 @@ EEI_SRC_PASSWORD=... EEI_DST_PASSWORD=... uv run email-export-import \
   --yes
 ```
 
+Desktop app (experimental):
+
+```bash
+uv sync --extra gui
+uv run email-export-import-gui
+```
+
+Same engine, same resume files as the CLI — start a migration in one and
+finish it in the other. Turkish and English UI.
+
 ## Notes
 
 - **App passwords:** Gmail, Outlook, Yahoo, iCloud, and Yandex all reject
