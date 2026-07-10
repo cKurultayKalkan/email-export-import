@@ -46,5 +46,7 @@
   "done.close": "Kapat",
   "error.auth": "Sunucu bu e-posta/parolayı reddetti. Adresi ve uygulama parolasını kontrol edin.",
   "error.connection": "Sunucuya bağlanılamadı. Sunucu adını ve ağınızı kontrol edin.",
-  "language.label": "Dil"
+  "language.label": "Dil",
+  "plan.spool": "Mesajları yükleme tamamlanana kadar diskte tut (başarısız yüklemeler tekrar indirilmeden diskten denenir)",
+  "done.spool_pending": "{count} mesaj tekrar denenmek üzere diskte tutuldu"
 }

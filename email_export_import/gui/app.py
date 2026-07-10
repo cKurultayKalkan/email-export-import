@@ -20,6 +20,7 @@ class WizardState:
     plan: PlanResult | None = None
     skip: set[str] = field(default_factory=set)
     workers: int = 4
+    spool: bool = False
     resume_session: MigrationState | None = None
 
 
@@ -60,6 +61,7 @@ def _page_main(page: ft.Page) -> None:
         cfg = session.config or {}
         ws.workers = cfg.get("workers", 4)
         ws.skip = set(cfg.get("skip", []))
+        ws.spool = cfg.get("spool", False)
         go_account("source", prefill=cfg.get("src", {}))
 
     def go_account(role: str, prefill: dict | None = None) -> None:
@@ -130,19 +132,24 @@ def _page_main(page: ft.Page) -> None:
 
         def go_plan_refresh() -> None:
             page.views[-1] = views.build_plan(
-                i18n, ws.plan, ws.skip, ws.workers,
-                on_toggle, on_workers, start_migration, lambda: go_account("dest"),
+                i18n, ws.plan, ws.skip, ws.workers, ws.spool,
+                on_toggle, on_workers, on_spool, start_migration,
+                lambda: go_account("dest"),
             )
             page.update()
 
         def on_workers(n: int) -> None:
             ws.workers = n
 
+        def on_spool(enabled: bool) -> None:
+            ws.spool = enabled
+
         page.views.clear()
         page.views.append(
             views.build_plan(
-                i18n, ws.plan, ws.skip, ws.workers,
-                on_toggle, on_workers, start_migration, lambda: go_account("dest"),
+                i18n, ws.plan, ws.skip, ws.workers, ws.spool,
+                on_toggle, on_workers, on_spool, start_migration,
+                lambda: go_account("dest"),
             )
         )
         page.update()
@@ -154,7 +161,8 @@ def _page_main(page: ft.Page) -> None:
             ws.src_account.email, ws.dst_account.email
         )
         controller.start(ws.src_conn, ws.dst_conn, active_plans, state,
-                         workers=ws.workers, total=total, skip=ws.skip)
+                         workers=ws.workers, total=total, skip=ws.skip,
+                         spool=ws.spool)
         go_progress(total)
 
     def go_progress(total: int) -> None:

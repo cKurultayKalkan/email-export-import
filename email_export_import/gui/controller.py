@@ -9,6 +9,7 @@ from ..errors import AuthFailed, CertificateVerifyFailed, ConnectionFailed, Quot
 from ..folders import build_folder_plan
 from ..models import Account, FolderPlan, TransferProgress
 from ..providers import get_preset
+from ..spool import MessageSpool
 from ..state import MigrationState
 from ..transfer import migrate
 
@@ -37,6 +38,7 @@ class RunSnapshot:
     result: TransferProgress | None = None
     error_kind: str | None = None  # "quota" | "fatal"
     error_message: str | None = None
+    spool_pending: int | None = None  # messages kept on disk for retry (None = spool off)
 
 
 class Controller:
@@ -55,6 +57,7 @@ class Controller:
         self._current_folder: str | None = None
         self._result: TransferProgress | None = None
         self._error: tuple[str, str] | None = None
+        self._spool_pending: int | None = None
 
     def list_sessions(self) -> list[MigrationState]:
         return MigrationState.list_resumable(base_dir=self.state_dir)
@@ -122,6 +125,7 @@ class Controller:
         workers: int,
         total: int,
         skip: set[str] | None = None,
+        spool: bool = False,
     ) -> None:
         if self._thread is not None and self._thread.is_alive():
             return  # a run is already in flight; ignore double-fire
@@ -133,6 +137,7 @@ class Controller:
             self._current_folder = None
             self._result = None
             self._error = None
+            self._spool_pending = None
 
         state.set_config(
             {
@@ -140,9 +145,18 @@ class Controller:
                 "dst": self._account_config(dst_conn.account),
                 "skip": sorted(skip or set()),
                 "workers": workers,
+                "spool": spool,
             }
         )
         state.flush()
+
+        message_spool = (
+            MessageSpool.for_pair(
+                src_conn.account.email, dst_conn.account.email, base_dir=self.state_dir
+            )
+            if spool
+            else None
+        )
 
         def on_message(folder: str, uid: int) -> None:
             with self._run_lock:
@@ -154,6 +168,7 @@ class Controller:
                 result = migrate(
                     src_conn, dst_conn, plans, state,
                     on_message=on_message, workers=workers, cancel=self._cancel,
+                    spool=message_spool,
                 )
                 if not self._cancel.is_set():
                     state.mark_completed()
@@ -167,6 +182,9 @@ class Controller:
                 with self._run_lock:
                     self._error = ("fatal", str(exc))
             finally:
+                if message_spool is not None:
+                    with self._run_lock:
+                        self._spool_pending = message_spool.pending_count()
                 src_conn.close()
                 dst_conn.close()
 
@@ -195,6 +213,7 @@ class Controller:
                 result=self._result,
                 error_kind=error_kind,
                 error_message=error_message,
+                spool_pending=self._spool_pending,
             )
 
     def cancel(self) -> None:

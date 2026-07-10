@@ -15,6 +15,7 @@ def test_wizard_state_defaults():
     ws = WizardState()
     assert ws.workers == 4
     assert ws.skip == set()
+    assert ws.spool is False
 
 
 def test_view_builders_set_route_and_controls():
@@ -29,8 +30,8 @@ def test_view_builders_set_route_and_controls():
     assert welcome.route == "/" and isinstance(welcome.controls, list)
 
     plan = views.build_plan(
-        i18n, PlanResult(plans=[], counts={}, total=0), set(), 4,
-        noop, noop, noop, noop,
+        i18n, PlanResult(plans=[], counts={}, total=0), set(), 4, False,
+        noop, noop, noop, noop, noop,
     )
     assert plan.route == "/plan" and isinstance(plan.controls, list)
 

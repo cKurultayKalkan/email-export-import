@@ -291,3 +291,48 @@ def test_runner_with_parallel_workers(monkeypatch, tmp_path):
     assert snap.processed == 12
     assert len(dst_fake.folders["A"]) == 7
     assert len(dst_fake.folders["B"]) == 5
+
+
+def test_start_with_spool_saves_config_and_reports_pending(monkeypatch, tmp_path):
+    from imapclient.exceptions import IMAPClientError
+
+    src_fake = FakeIMAPClient(folders={"INBOX": [make_message(uid=1, message_id="<m1@x>")]})
+    dst_fake = FakeIMAPClient(folders={"INBOX": []})
+    dst_fake.append_error = IMAPClientError("temp failure")  # upload fails -> spool keeps it
+    _wire_pair(monkeypatch, src_fake, dst_fake)
+
+    c = Controller(state_dir=tmp_path)
+    src_conn = c.test_connection(ACCOUNT).conn
+    dst_acc = Account(host="dst.test", port=993, ssl=True, email="b@y", password="p")
+    dst_conn = c.test_connection(dst_acc).conn
+    plan = c.build_plan(src_conn, dst_conn, skip=set())
+    state = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+
+    c.start(src_conn, dst_conn, plan.plans, state, workers=1, total=plan.total, spool=True)
+    c.join(timeout=10)
+
+    snap = c.snapshot()
+    assert snap.result.failed == 1
+    assert snap.spool_pending == 1
+    reloaded = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+    assert reloaded.config["spool"] is True
+    assert (tmp_path / "spool").exists()
+
+
+def test_start_without_spool_reports_no_pending(monkeypatch, tmp_path):
+    src_fake = FakeIMAPClient(folders={"INBOX": [make_message(uid=1, message_id="<m1@x>")]})
+    dst_fake = FakeIMAPClient(folders={"INBOX": []})
+    _wire_pair(monkeypatch, src_fake, dst_fake)
+
+    c = Controller(state_dir=tmp_path)
+    src_conn = c.test_connection(ACCOUNT).conn
+    dst_acc = Account(host="dst.test", port=993, ssl=True, email="b@y", password="p")
+    dst_conn = c.test_connection(dst_acc).conn
+    plan = c.build_plan(src_conn, dst_conn, skip=set())
+    state = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+
+    c.start(src_conn, dst_conn, plan.plans, state, workers=1, total=plan.total)
+    c.join(timeout=10)
+
+    assert c.snapshot().spool_pending is None
+    assert MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path).config["spool"] is False

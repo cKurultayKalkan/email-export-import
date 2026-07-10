@@ -152,8 +152,10 @@ def build_plan(
     plan: PlanResult,
     skip: set[str],
     workers: int,
+    spool: bool,
     on_toggle: Callable[[str, bool], None],
     on_workers: Callable[[int], None],
+    on_spool: Callable[[bool], None],
     on_start: Callable[[], None],
     on_back: Callable[[], None],
 ) -> ft.View:
@@ -196,6 +198,11 @@ def build_plan(
             ft.Text(i18n.t("plan.title"), size=18, weight=ft.FontWeight.BOLD),
             ft.Column([table], scroll=ft.ScrollMode.AUTO, expand=True),
             ft.Row([workers_dd, ft.Text(i18n.t("plan.total", count=selected_total))]),
+            ft.Checkbox(
+                label=i18n.t("plan.spool"),
+                value=spool,
+                on_change=lambda e: on_spool(bool(e.control.value)),
+            ),
             ft.Row(
                 [
                     ft.TextButton(i18n.t("account.back"), on_click=lambda e: on_back()),
@@ -261,6 +268,10 @@ def build_done(
                     height=200,
                 )
             )
+    if snap.spool_pending:
+        controls.append(
+            ft.Text(i18n.t("done.spool_pending", count=snap.spool_pending), size=12)
+        )
     controls.append(ft.Text(i18n.t("done.resume_hint"), size=12))
     controls.append(ft.FilledButton(i18n.t("done.close"), on_click=lambda e: on_close()))
     return ft.View(route="/done", controls=controls, padding=24, spacing=12)
