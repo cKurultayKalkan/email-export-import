@@ -183,3 +183,74 @@ def test_runner_quota_reports_error(monkeypatch, tmp_path):
     snap = c.snapshot()
     assert snap.error_kind == "quota"
     assert MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path).status == "running"
+
+
+def test_snapshot_polls_during_live_run(monkeypatch, tmp_path):
+    import threading
+
+    msgs = [make_message(uid=i, message_id=f"<m{i}@x>") for i in range(1, 6)]
+    src_fake = FakeIMAPClient(folders={"INBOX": msgs})
+    dst_fake = FakeIMAPClient(folders={"INBOX": []})
+
+    first_done = threading.Event()
+    gate = threading.Event()
+    real_append = dst_fake.append
+    calls = {"n": 0}
+
+    def gated_append(folder, body, flags=(), msg_time=None):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            first_done.set()
+            gate.wait(timeout=5)  # park the worker mid-run
+        return real_append(folder, body, flags=flags, msg_time=msg_time)
+
+    dst_fake.append = gated_append
+    _wire_pair(monkeypatch, src_fake, dst_fake)
+
+    c = Controller(state_dir=tmp_path)
+    src_conn = c.test_connection(ACCOUNT).conn
+    dst_acc = Account(host="dst.test", port=993, ssl=True, email="b@y", password="p")
+    dst_conn = c.test_connection(dst_acc).conn
+    plan = c.build_plan(src_conn, dst_conn, skip=set())
+    state = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+
+    c.start(src_conn, dst_conn, plan.plans, state, workers=1, total=plan.total)
+    assert first_done.wait(timeout=5)
+    snap = c.snapshot()  # read WHILE the run thread is alive and mid-message
+    assert snap.running is True
+    assert snap.processed >= 1
+    assert snap.total == 5
+    gate.set()
+    c.join(timeout=10)
+    assert c.snapshot().result.migrated == 5
+
+
+def test_runner_with_parallel_workers(monkeypatch, tmp_path):
+    src_data = {
+        "A": [make_message(uid=i, message_id=f"<a{i}@x>") for i in range(1, 8)],
+        "B": [make_message(uid=i, message_id=f"<b{i}@x>") for i in range(1, 6)],
+    }
+    dst_fake = FakeIMAPClient(folders={"A": [], "B": []})
+
+    def factory(host, port=993, ssl=True, **kw):
+        if host == "imap.test":
+            return FakeIMAPClient(folders=src_data)  # fresh session per connection
+        return dst_fake
+
+    install(monkeypatch, factory)
+
+    c = Controller(state_dir=tmp_path)
+    src_conn = c.test_connection(ACCOUNT).conn
+    dst_acc = Account(host="dst.test", port=993, ssl=True, email="b@y", password="p")
+    dst_conn = c.test_connection(dst_acc).conn
+    plan = c.build_plan(src_conn, dst_conn, skip=set())
+    state = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+
+    c.start(src_conn, dst_conn, plan.plans, state, workers=3, total=plan.total)
+    c.join(timeout=10)
+
+    snap = c.snapshot()
+    assert snap.result.migrated == 12
+    assert snap.processed == 12
+    assert len(dst_fake.folders["A"]) == 7
+    assert len(dst_fake.folders["B"]) == 5
