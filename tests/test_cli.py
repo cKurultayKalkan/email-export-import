@@ -226,3 +226,20 @@ def test_namespace_prefix_used_for_created_folders(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.output
     assert dst.folder_exists("INBOX.Gelen Kutusu")
     assert len(dst.folders["INBOX.Gelen Kutusu"]) == 1
+
+
+def test_dst_email_prompt_defaults_to_src_email(monkeypatch, tmp_path):
+    src = FakeIMAPClient(folders={"INBOX": []})
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    install_hosts(monkeypatch, {"src.test": src, "dst.test": dst})
+
+    result = runner.invoke(
+        app,
+        ["--src-host", "src.test", "--src-port", "993", "--src-email", "a@x.com",
+         "--dst-host", "dst.test", "--dst-port", "993",
+         "--state-dir", str(tmp_path)],
+        env={"EEI_SRC_PASSWORD": "p1", "EEI_DST_PASSWORD": "p2"},
+        input="\ny\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "connected to dst.test as a@x.com" in result.output

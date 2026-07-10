@@ -59,6 +59,7 @@ def _gather_account(
     password_env: str,
     interactive: bool,
     verify_ssl: bool = True,
+    default_email: Optional[str] = None,
 ) -> tuple[Account, ProviderPreset | None]:
     prefix = "src" if role == "Source" else "dst"
     preset: ProviderPreset | None = None
@@ -94,7 +95,12 @@ def _gather_account(
         if not interactive:
             console.print(f"[red]{role}: --{prefix}-email is required with --yes[/red]")
             raise typer.Exit(code=1)
-        email_addr = Prompt.ask(f"{role} email address")
+        # Most migrations keep the same address — offer the source email as
+        # the default so Enter accepts it.
+        if default_email is not None:
+            email_addr = Prompt.ask(f"{role} email address", default=default_email)
+        else:
+            email_addr = Prompt.ask(f"{role} email address")
     password = os.environ.get(password_env)
     if not password:
         if not interactive:
@@ -218,7 +224,7 @@ def run(
 
     dst_account, _ = _gather_account(
         "Destination", dst_preset, dst_host, dst_port, dst_ssl, dst_email, DST_PASSWORD_ENV,
-        interactive, dst_verify_ssl,
+        interactive, dst_verify_ssl, default_email=src_account.email,
     )
     dst_conn = _connect(dst_account, "Destination", interactive)
 
