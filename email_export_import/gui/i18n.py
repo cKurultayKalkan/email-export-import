@@ -31,6 +31,8 @@ class I18n:
             name: json.loads((LOCALES_DIR / f"{name}.json").read_text())
             for name in available_locales()
         }
+        if locale is not None and locale not in self._tables:
+            locale = None
         self.locale = (
             locale
             or self._saved_locale()
@@ -46,6 +48,8 @@ class I18n:
         return saved if saved in self._tables else None
 
     def set_locale(self, locale: str) -> None:
+        if locale not in self._tables:
+            raise ValueError(f"unknown locale: {locale!r}")
         self.locale = locale
         self._prefs_path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(

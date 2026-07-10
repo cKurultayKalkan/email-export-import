@@ -33,3 +33,17 @@ def test_set_locale_persists(tmp_path):
     i.set_locale("tr")
     assert (prefs.stat().st_mode & 0o777) == 0o600
     assert I18n(prefs_path=prefs).locale == "tr"
+
+
+def test_set_locale_rejects_unknown(tmp_path):
+    import pytest
+
+    i = I18n(locale="en", prefs_path=tmp_path / "gui.json")
+    with pytest.raises(ValueError):
+        i.set_locale("xx")
+    assert i.locale == "en"  # unchanged
+
+
+def test_constructor_unknown_locale_falls_back(tmp_path):
+    i = I18n(locale="xx", prefs_path=tmp_path / "gui.json")
+    assert i.locale in {"en", "tr"}
