@@ -14,7 +14,7 @@ email-export-import = "email_export_import.cli:app"
 email-export-import-gui = "email_export_import.gui.app:main"
 
 [project.optional-dependencies]
-gui = ["flet>=0.25,<1.0"]
+gui = ["flet>=0.85,<0.86"]
 
 [dependency-groups]
 dev = ["pytest>=8.0"]
