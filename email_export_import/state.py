@@ -20,6 +20,10 @@ class MigrationState:
         self.path = path
         # {folder: {"uidvalidity": int|None, "message_ids": set[str], "uids": set[int]}}
         self._folders: dict[str, dict] = {}
+        # Session settings (hosts, emails, skip list, workers — never passwords)
+        # so an interrupted run can be resumed without re-entering everything.
+        self.config: dict | None = None
+        self.status: str = "running"
         if path.exists():
             raw = json.loads(path.read_text())
             for name, f in raw.get("folders", {}).items():
@@ -28,6 +32,8 @@ class MigrationState:
                     "message_ids": set(f["message_ids"]),
                     "uids": set(f["uids"]),
                 }
+            self.config = raw.get("config")
+            self.status = raw.get("status", "running")
 
     @classmethod
     def for_pair(
@@ -39,6 +45,34 @@ class MigrationState:
         os.chmod(base, 0o700)
         os.chmod(state_dir, 0o700)
         return cls(state_dir / f"{src_email}__{dst_email}.json")
+
+    @classmethod
+    def list_resumable(cls, base_dir: Path | None = None) -> list["MigrationState"]:
+        """Interrupted sessions (status running, with a saved config), oldest
+        path first. Unreadable or pre-session-format files are skipped."""
+        state_dir = (base_dir or DEFAULT_BASE_DIR) / "state"
+        if not state_dir.is_dir():
+            return []
+        out: list[MigrationState] = []
+        for path in sorted(state_dir.glob("*.json")):
+            try:
+                s = cls(path)
+            except Exception:
+                continue
+            if s.status != "completed" and s.config is not None:
+                out.append(s)
+        return out
+
+    def set_config(self, config: dict) -> None:
+        self.config = config
+
+    def mark_completed(self) -> None:
+        self.status = "completed"
+
+    def migrated_count(self) -> int:
+        return sum(
+            len(f["message_ids"]) + len(f["uids"]) for f in self._folders.values()
+        )
 
     def _folder(self, folder: str) -> dict:
         return self._folders.setdefault(
@@ -75,7 +109,9 @@ class MigrationState:
                     "uids": sorted(f["uids"]),
                 }
                 for name, f in self._folders.items()
-            }
+            },
+            "config": self.config,
+            "status": self.status,
         }
         tmp = self.path.with_suffix(".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

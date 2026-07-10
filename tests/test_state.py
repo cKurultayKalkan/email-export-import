@@ -82,3 +82,59 @@ def test_flush_is_atomic_and_keeps_0600(tmp_path):
     s.flush()
     assert (path.stat().st_mode & 0o777) == 0o600
     assert not path.with_suffix(".tmp").exists()
+
+
+def test_config_and_status_roundtrip(tmp_path):
+    path = tmp_path / "s.json"
+    s = MigrationState(path)
+    assert s.status == "running"
+    assert s.config is None
+    cfg = {"src": {"host": "a", "port": 993}, "dst": {"host": "b"}, "workers": 4}
+    s.set_config(cfg)
+    s.flush()
+
+    s2 = MigrationState(path)
+    assert s2.config == cfg
+    assert s2.status == "running"
+    s2.mark_completed()
+    s2.flush()
+    assert MigrationState(path).status == "completed"
+
+
+def test_migrated_count(tmp_path):
+    s = MigrationState(tmp_path / "s.json")
+    s.mark_migrated("INBOX", "<a@x>", 1)
+    s.mark_migrated("INBOX", None, 2)
+    s.mark_migrated("Sent", "<b@x>", 3)
+    assert s.migrated_count() == 3
+
+
+def test_list_resumable_filters(tmp_path):
+    base = tmp_path / "base"
+
+    running = MigrationState.for_pair("a@x", "b@y", base_dir=base)
+    running.set_config({"src": {"host": "h1"}})
+    running.flush()
+
+    done = MigrationState.for_pair("c@x", "d@y", base_dir=base)
+    done.set_config({"src": {"host": "h2"}})
+    done.mark_completed()
+    done.flush()
+
+    no_config = MigrationState.for_pair("e@x", "f@y", base_dir=base)  # old format
+    no_config.flush()
+
+    (base / "state" / "corrupt.json").write_text("{not json")
+
+    resumable = MigrationState.list_resumable(base_dir=base)
+    assert len(resumable) == 1
+    assert resumable[0].config == {"src": {"host": "h1"}}
+
+
+def test_old_format_state_still_loads(tmp_path):
+    path = tmp_path / "s.json"
+    path.write_text('{"folders": {"INBOX": {"uidvalidity": 1, "message_ids": ["<a@x>"], "uids": []}}}')
+    s = MigrationState(path)
+    assert s.is_migrated("INBOX", "<a@x>", 1)
+    assert s.status == "running"
+    assert s.config is None

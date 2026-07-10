@@ -257,3 +257,59 @@ def test_workers_flag_end_to_end(monkeypatch, tmp_path):
     )
     assert result.exit_code == 0, result.output
     assert len(dst.folders["INBOX"]) == 1
+
+
+def _session_config(workers=1):
+    return {
+        "src": {"host": "src.test", "port": 993, "ssl": True, "verify_ssl": True,
+                "email": "a@x.com"},
+        "dst": {"host": "dst.test", "port": 993, "ssl": True, "verify_ssl": True,
+                "email": "b@y.com"},
+        "skip": [],
+        "workers": workers,
+    }
+
+
+def test_wizard_offers_resume_of_unfinished_session(monkeypatch, tmp_path):
+    from email_export_import.state import MigrationState
+
+    prior = MigrationState.for_pair("a@x.com", "b@y.com", base_dir=tmp_path)
+    prior.set_config(_session_config())
+    prior.flush()
+
+    src = FakeIMAPClient(folders={"INBOX": [make_message(uid=1, message_id="<a@x>")]})
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    install_hosts(monkeypatch, {"src.test": src, "dst.test": dst})
+
+    result = runner.invoke(
+        app,
+        ["--state-dir", str(tmp_path)],  # no connection flags -> resume offer
+        env={"EEI_SRC_PASSWORD": "p1", "EEI_DST_PASSWORD": "p2"},
+        input="\ny\n",  # accept default session 1, then start migration
+    )
+    assert result.exit_code == 0, result.output
+    assert "a@x.com" in result.output  # session table shown
+    assert len(dst.folders["INBOX"]) == 1
+
+    after = MigrationState.for_pair("a@x.com", "b@y.com", base_dir=tmp_path)
+    assert after.status == "completed"
+
+
+def test_successful_run_saves_config_and_marks_completed(monkeypatch, tmp_path):
+    from email_export_import.state import MigrationState
+
+    src = FakeIMAPClient(folders={"INBOX": [make_message(uid=1, message_id="<a@x>")]})
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    install_hosts(monkeypatch, {"src.test": src, "dst.test": dst})
+
+    result = runner.invoke(
+        app,
+        base_args(["--state-dir", str(tmp_path)]),
+        env={"EEI_SRC_PASSWORD": "p1", "EEI_DST_PASSWORD": "p2"},
+    )
+    assert result.exit_code == 0, result.output
+
+    saved = MigrationState.for_pair("a@x.com", "b@y.com", base_dir=tmp_path)
+    assert saved.status == "completed"
+    assert saved.config["src"]["host"] == "src.test"
+    assert "password" not in str(saved.config).lower()

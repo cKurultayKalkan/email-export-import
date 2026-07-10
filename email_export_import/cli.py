@@ -165,6 +165,57 @@ def _connect(account: Account, role: str, interactive: bool) -> MailConnection:
             account.password = Prompt.ask("Password", password=True)
 
 
+def _offer_resume(state_dir: Optional[Path]) -> MigrationState | None:
+    """Show unfinished sessions and let the user pick one (or start fresh)."""
+    sessions = MigrationState.list_resumable(base_dir=state_dir)
+    if not sessions:
+        return None
+    table = Table(title="Unfinished migrations")
+    table.add_column("#", justify="right")
+    table.add_column("Source")
+    table.add_column("Destination")
+    table.add_column("Migrated", justify="right")
+    for i, s in enumerate(sessions, 1):
+        cfg = s.config or {}
+        table.add_row(
+            str(i),
+            f"{cfg['src']['email']} ({cfg['src']['host']})",
+            f"{cfg['dst']['email']} ({cfg['dst']['host']})",
+            str(s.migrated_count()),
+        )
+    console.print(table)
+    choice = IntPrompt.ask("Resume which? (0 = start new)", default=1)
+    if 1 <= choice <= len(sessions):
+        return sessions[choice - 1]
+    return None
+
+
+def _account_from_config(cfg: dict, password_env: str, role: str) -> Account:
+    """Rebuild an Account from a saved session; only the password is asked."""
+    password = os.environ.get(password_env) or Prompt.ask(
+        f"{role} password", password=True
+    )
+    return Account(
+        host=cfg["host"],
+        port=cfg["port"],
+        ssl=cfg["ssl"],
+        email=cfg["email"],
+        password=password,
+        verify_ssl=cfg.get("verify_ssl", True),
+    )
+
+
+def _account_config(account: Account) -> dict:
+    """Session-file view of an account — everything except the password."""
+    return {
+        "host": account.host,
+        "port": account.port,
+        "ssl": account.ssl,
+        "verify_ssl": account.verify_ssl,
+        "email": account.email,
+    }
+
+
 def _namespace_prefix(conn: MailConnection) -> str:
     """The server's personal-namespace prefix (e.g. 'INBOX.' on Courier),
     or '' when the server has none or doesn't support NAMESPACE."""
@@ -223,30 +274,48 @@ def run(
     """Migrate a mailbox from one IMAP server to another."""
     interactive = not yes
 
-    src_account, src_preset_obj = _gather_account(
-        "Source", src_preset, src_host, src_port, src_ssl, src_email, SRC_PASSWORD_ENV,
-        interactive, src_verify_ssl,
-    )
-    src_conn = _connect(src_account, "Source", interactive)
+    # A bare interactive invocation first offers to resume an unfinished
+    # session — all settings come from the session file, only passwords are
+    # asked again (they are never stored).
+    resume_state: MigrationState | None = None
+    if interactive and not any(
+        [src_preset, src_host, src_email, dst_preset, dst_host, dst_email]
+    ):
+        resume_state = _offer_resume(state_dir)
 
-    dst_account, _ = _gather_account(
-        "Destination", dst_preset, dst_host, dst_port, dst_ssl, dst_email, DST_PASSWORD_ENV,
-        interactive, dst_verify_ssl, default_email=src_account.email,
-    )
-    dst_conn = _connect(dst_account, "Destination", interactive)
-
-    # Skip list: --skip wins; otherwise preset default, editable interactively.
-    default_skip = set(src_preset_obj.skip_folders) if src_preset_obj else set()
-    if skip is not None:
-        skip_set = {s.strip() for s in skip.split(",") if s.strip()}
-    elif interactive and default_skip:
-        raw = Prompt.ask(
-            "Folders to skip (comma-separated)",
-            default=", ".join(sorted(default_skip)),
-        )
-        skip_set = {s.strip() for s in raw.split(",") if s.strip()}
+    if resume_state is not None:
+        cfg = resume_state.config or {}
+        src_account = _account_from_config(cfg["src"], SRC_PASSWORD_ENV, "Source")
+        dst_account = _account_from_config(cfg["dst"], DST_PASSWORD_ENV, "Destination")
+        skip_set = set(cfg.get("skip", []))
+        workers = cfg.get("workers", workers)
+        src_conn = _connect(src_account, "Source", interactive)
+        dst_conn = _connect(dst_account, "Destination", interactive)
     else:
-        skip_set = default_skip
+        src_account, src_preset_obj = _gather_account(
+            "Source", src_preset, src_host, src_port, src_ssl, src_email, SRC_PASSWORD_ENV,
+            interactive, src_verify_ssl,
+        )
+        src_conn = _connect(src_account, "Source", interactive)
+
+        dst_account, _ = _gather_account(
+            "Destination", dst_preset, dst_host, dst_port, dst_ssl, dst_email, DST_PASSWORD_ENV,
+            interactive, dst_verify_ssl, default_email=src_account.email,
+        )
+        dst_conn = _connect(dst_account, "Destination", interactive)
+
+        # Skip list: --skip wins; otherwise preset default, editable interactively.
+        default_skip = set(src_preset_obj.skip_folders) if src_preset_obj else set()
+        if skip is not None:
+            skip_set = {s.strip() for s in skip.split(",") if s.strip()}
+        elif interactive and default_skip:
+            raw = Prompt.ask(
+                "Folders to skip (comma-separated)",
+                default=", ".join(sorted(default_skip)),
+            )
+            skip_set = {s.strip() for s in raw.split(",") if s.strip()}
+        else:
+            skip_set = default_skip
 
     plans = build_folder_plan(
         src_conn.client.list_folders(),
@@ -271,9 +340,18 @@ def run(
     if interactive and not Confirm.ask("Start migration?"):
         raise typer.Exit(code=0)
 
-    state = MigrationState.for_pair(
+    state = resume_state or MigrationState.for_pair(
         src_account.email, dst_account.email, base_dir=state_dir
     )
+    state.set_config(
+        {
+            "src": _account_config(src_account),
+            "dst": _account_config(dst_account),
+            "skip": sorted(skip_set),
+            "workers": workers,
+        }
+    )
+    state.flush()
 
     progress_bar = Progress(
         TextColumn("[progress.description]{task.description}"),
@@ -306,6 +384,10 @@ def run(
     finally:
         src_conn.close()
         dst_conn.close()
+
+    # Only a run that made it here finished cleanly — stop offering it for resume.
+    state.mark_completed()
+    state.flush()
 
     summary = Table(title="Done")
     summary.add_column("Migrated", justify="right")
