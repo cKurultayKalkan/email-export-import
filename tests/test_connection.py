@@ -21,7 +21,7 @@ def install_factory(monkeypatch, clients):
     """Monkeypatch connection.IMAPClient with a factory popping from *clients*."""
     calls = []
 
-    def factory(host, port=993, ssl=True):
+    def factory(host, port=993, ssl=True, **kwargs):
         calls.append((host, port, ssl))
         client = clients.pop(0)
         if isinstance(client, Exception):
@@ -165,3 +165,15 @@ def test_verify_ssl_default_passes_no_custom_context(monkeypatch):
     monkeypatch.setattr(connection, "IMAPClient", factory)
     MailConnection(ACCOUNT).connect()
     assert "ssl_context" not in captured
+
+
+def test_socket_timeout_configured(monkeypatch):
+    captured = {}
+
+    def factory(host, port=993, ssl=True, **kwargs):
+        captured.update(kwargs)
+        return FakeIMAPClient()
+
+    monkeypatch.setattr(connection, "IMAPClient", factory)
+    MailConnection(ACCOUNT).connect()
+    assert captured["timeout"] == 60

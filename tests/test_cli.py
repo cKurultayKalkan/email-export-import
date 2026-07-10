@@ -8,7 +8,7 @@ runner = CliRunner()
 
 
 def install_hosts(monkeypatch, by_host):
-    def factory(host, port=993, ssl=True):
+    def factory(host, port=993, ssl=True, **kwargs):
         return by_host[host]
 
     monkeypatch.setattr(connection, "IMAPClient", factory)

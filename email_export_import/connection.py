@@ -13,6 +13,12 @@ from .models import Account
 
 T = TypeVar("T")
 
+# Per-socket-operation timeout. IMAPClient's default of None blocks forever on
+# a half-dead connection; with a timeout the stall surfaces as an OSError that
+# with_retry() turns into a reconnect. Long downloads are unaffected — the
+# timeout applies per read, not per command.
+SOCKET_TIMEOUT = 60
+
 
 class MailConnection:
     """Owns one IMAP session; reconnects and retries transient failures.
@@ -39,7 +45,11 @@ class MailConnection:
             kwargs["ssl_context"] = ctx
         try:
             client = IMAPClient(
-                self.account.host, port=self.account.port, ssl=self.account.ssl, **kwargs
+                self.account.host,
+                port=self.account.port,
+                ssl=self.account.ssl,
+                timeout=SOCKET_TIMEOUT,
+                **kwargs,
             )
         except ssl_module.SSLCertVerificationError as exc:
             raise CertificateVerifyFailed(

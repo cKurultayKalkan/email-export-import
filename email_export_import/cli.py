@@ -8,6 +8,7 @@ import typer
 from rich.console import Console
 from rich.progress import (
     BarColumn,
+    MofNCompleteColumn,
     Progress,
     TaskProgressColumn,
     TextColumn,
@@ -264,6 +265,7 @@ def run(
     progress_bar = Progress(
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
+        MofNCompleteColumn(),
         TaskProgressColumn(),
         TimeRemainingColumn(),
         console=console,

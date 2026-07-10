@@ -25,7 +25,7 @@ def no_sleep(monkeypatch):
 def make_conns(monkeypatch, src_fake, dst_fake):
     monkeypatch.setattr(
         connection, "IMAPClient",
-        lambda host, port=993, ssl=True: src_fake if host == "src.test" else dst_fake,
+        lambda host, port=993, ssl=True, **kwargs: src_fake if host == "src.test" else dst_fake,
     )
     return MailConnection(SRC), MailConnection(DST)
 

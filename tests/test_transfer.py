@@ -26,7 +26,7 @@ def no_sleep(monkeypatch):
 
 
 def make_conns(monkeypatch, src_fake, dst_fake):
-    def factory(host, port=993, ssl=True):
+    def factory(host, port=993, ssl=True, **kwargs):
         return src_fake if host == "src.test" else dst_fake
 
     monkeypatch.setattr(connection, "IMAPClient", factory)
