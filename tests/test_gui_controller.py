@@ -232,6 +232,36 @@ def test_default_skip_for_gmail_and_custom(tmp_path):
     assert c.default_skip("nonexistent") == set()
 
 
+def test_overlapping_start_is_ignored(monkeypatch, tmp_path):
+    import threading
+
+    msgs = [make_message(uid=i, message_id=f"<m{i}@x>") for i in range(1, 4)]
+    src_fake = FakeIMAPClient(folders={"INBOX": msgs})
+    dst_fake = FakeIMAPClient(folders={"INBOX": []})
+    gate = threading.Event()
+    real_append = dst_fake.append
+
+    def gated_append(folder, body, flags=(), msg_time=None):
+        gate.wait(timeout=5)
+        return real_append(folder, body, flags=flags, msg_time=msg_time)
+
+    dst_fake.append = gated_append
+    _wire_pair(monkeypatch, src_fake, dst_fake)
+
+    c = Controller(state_dir=tmp_path)
+    src_conn = c.test_connection(ACCOUNT).conn
+    dst_acc = Account(host="dst.test", port=993, ssl=True, email="b@y", password="p")
+    dst_conn = c.test_connection(dst_acc).conn
+    plan = c.build_plan(src_conn, dst_conn, skip=set())
+    state = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+
+    c.start(src_conn, dst_conn, plan.plans, state, workers=1, total=plan.total)
+    c.start(src_conn, dst_conn, plan.plans, state, workers=1, total=plan.total)  # ignored
+    gate.set()
+    c.join(timeout=10)
+    assert c.snapshot().result.migrated == 3  # ran exactly once
+
+
 def test_runner_with_parallel_workers(monkeypatch, tmp_path):
     src_data = {
         "A": [make_message(uid=i, message_id=f"<a{i}@x>") for i in range(1, 8)],

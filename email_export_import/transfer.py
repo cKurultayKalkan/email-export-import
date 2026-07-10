@@ -190,8 +190,8 @@ def migrate(
         errors: list[Exception] = []
 
         def run_worker() -> None:
-            wsrc = MailConnection(src.account, max_retries=src.max_retries)
-            wdst = MailConnection(dst.account, max_retries=dst.max_retries)
+            wsrc = MailConnection(src.account, max_retries=src.max_retries, cancel=stop)
+            wdst = MailConnection(dst.account, max_retries=dst.max_retries, cancel=stop)
             try:
                 while not stop.is_set():
                     try:

@@ -123,6 +123,9 @@ class Controller:
         total: int,
         skip: set[str] | None = None,
     ) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return  # a run is already in flight; ignore double-fire
+
         with self._run_lock:
             self._cancel = threading.Event()
             self._processed = 0

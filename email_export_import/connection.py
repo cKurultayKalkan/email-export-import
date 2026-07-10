@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import ssl as ssl_module
+import threading
 import time
 from typing import Callable, TypeVar
 
@@ -12,6 +13,11 @@ from .errors import AuthFailed, CertificateVerifyFailed, ConnectionFailed
 from .models import Account
 
 T = TypeVar("T")
+
+
+class _RetryCancelled(Exception):
+    """Internal signal: the cancel event fired during a retry backoff."""
+
 
 # Per-socket-operation timeout. IMAPClient's default of None blocks forever on
 # a half-dead connection; with a timeout the stall surfaces as an OSError that
@@ -35,7 +41,12 @@ class MailConnection:
     re-selecting the folder that was active before the drop.
     """
 
-    def __init__(self, account: Account, max_retries: int = 3) -> None:
+    def __init__(
+        self,
+        account: Account,
+        max_retries: int = 3,
+        cancel: threading.Event | None = None,
+    ) -> None:
         self.account = account
         self.max_retries = max_retries
         self._client: IMAPClient | None = None
@@ -44,6 +55,11 @@ class MailConnection:
         # then a transient server condition (rate limit, per-IP connection
         # cap), not bad credentials, and with_retry() may retry it.
         self._authenticated_once = False
+        # When set, retry backoffs abort immediately on cancellation instead
+        # of sleeping out the full (up to 300s) interval — a frozen "Cancel"
+        # button is a bad experience even though the retry is "working as
+        # intended".
+        self._cancel = cancel
 
     def connect(self) -> IMAPClient:
         kwargs = {}
@@ -102,28 +118,43 @@ class MailConnection:
         self._selected = (folder, readonly)
         return self.with_retry(lambda c: c.select_folder(folder, readonly=readonly))
 
+    def _backoff(self, seconds: float) -> None:
+        """Sleep, but abort the retry loop immediately if cancelled."""
+        if self._cancel is None:
+            time.sleep(seconds)
+        elif self._cancel.wait(seconds):
+            raise _RetryCancelled()
+
     def with_retry(self, fn: Callable[[IMAPClient], T]) -> T:
         net_attempt = 0
         auth_attempt = 0
         while True:
+            last_exc: Exception | None = None
             try:
-                return fn(self.client)
-            except AuthFailed:
-                # Only a reconnect's login can be rejected transiently; a
-                # first-time rejection is bad credentials — no retry.
-                if not self._authenticated_once or auth_attempt >= len(AUTH_RETRY_SLEEPS):
-                    raise
-                self._client = None
-                time.sleep(AUTH_RETRY_SLEEPS[auth_attempt])
-                auth_attempt += 1
-            except (IMAPClientError, OSError, ConnectionFailed):
-                # ConnectionFailed comes from connect() during a reconnect —
-                # as transient as the dropped command that triggered it.
-                net_attempt += 1
-                self._client = None  # next .client access reconnects + reselects
-                if net_attempt >= self.max_retries:
-                    raise
-                time.sleep(min(2 ** (net_attempt - 1), 8))
+                try:
+                    return fn(self.client)
+                except AuthFailed as exc:
+                    # Only a reconnect's login can be rejected transiently; a
+                    # first-time rejection is bad credentials — no retry.
+                    if not self._authenticated_once or auth_attempt >= len(AUTH_RETRY_SLEEPS):
+                        raise
+                    last_exc = exc
+                    self._client = None
+                    self._backoff(AUTH_RETRY_SLEEPS[auth_attempt])
+                    auth_attempt += 1
+                except (IMAPClientError, OSError, ConnectionFailed) as exc:
+                    # ConnectionFailed comes from connect() during a reconnect —
+                    # as transient as the dropped command that triggered it.
+                    net_attempt += 1
+                    self._client = None  # next .client access reconnects + reselects
+                    if net_attempt >= self.max_retries:
+                        raise
+                    last_exc = exc
+                    self._backoff(min(2 ** (net_attempt - 1), 8))
+            except _RetryCancelled:
+                # Cancelled while waiting out the backoff: surface the error
+                # that triggered this retry rather than the internal signal.
+                raise last_exc from None
 
     def close(self) -> None:
         if self._client is not None:

@@ -250,6 +250,25 @@ def test_verify_ssl_default_passes_no_custom_context(monkeypatch):
     assert "ssl_context" not in captured
 
 
+def test_cancel_event_interrupts_retry_backoff(monkeypatch):
+    import threading
+    import time as time_module
+
+    fake_broken = FakeIMAPClient()
+    install_factory(monkeypatch, [fake_broken] + [FakeIMAPClient() for _ in range(5)])
+    cancel = threading.Event()
+    conn = MailConnection(ACCOUNT, cancel=cancel)
+
+    def always_fails(client):
+        cancel.set()  # cancelled while the retry backoff would sleep
+        raise IMAPClientError("still broken")
+
+    start = time_module.monotonic()
+    with pytest.raises(IMAPClientError):
+        conn.with_retry(always_fails)
+    assert time_module.monotonic() - start < 2  # no multi-second sleep happened
+
+
 def test_socket_timeout_configured(monkeypatch):
     captured = {}
 
