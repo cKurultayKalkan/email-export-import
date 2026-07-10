@@ -113,6 +113,7 @@ def build_account(
             ssl=bool(use_ssl.value),
             email=email.value.strip(),
             password=password.value,
+            verify_ssl=bool(initial.get("verify_ssl", True)),
         )
 
     def _test_clicked(e) -> None:
@@ -122,6 +123,10 @@ def build_account(
             port.update()
             return
         port.error_text = None
+        try:
+            port.update()
+        except RuntimeError:
+            pass  # not mounted to a page yet (e.g. called directly in tests)
         on_test(account(p))
 
     controls = [
