@@ -49,6 +49,11 @@ EEI_SRC_PASSWORD=... EEI_DST_PASSWORD=... uv run email-export-import \
   runs, not within a dropped upload.
 - **Quota:** if the destination fills up, the run aborts immediately with
   a clear message; free space and re-run to resume.
+- **Speed:** the transfer runs on 4 parallel IMAP connections by default;
+  tune with `--workers N` (1 = serial). Large folders are split into
+  chunks so even a single huge folder parallelises. Providers cap
+  concurrent IMAP connections (Gmail ~15, shared hosts often ~10) —
+  if you see connection errors, lower the worker count.
 - **Folder namespaces:** servers that keep every folder under `INBOX.`
   (Courier, many cPanel/Roundcube hosts) are handled automatically — the
   tool reads the destination's NAMESPACE and prefixes created folders

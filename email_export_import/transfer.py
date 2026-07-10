@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import email
+import queue
+import threading
 from typing import Callable
 
 from .connection import MailConnection
@@ -16,6 +18,10 @@ _QUOTA_MARKERS = ("quota",)
 
 # Fired after every processed message: (source_folder, uid).
 MessageCallback = Callable[[str, int], None]
+
+# A folder's UIDs are split into chunks of this size; each chunk is one unit
+# of work a worker claims, so a single huge folder still parallelises.
+CHUNK_SIZE = 500
 
 _META_FIELDS = [
     b"FLAGS",
@@ -42,52 +48,79 @@ def is_quota_error(exc: Exception) -> bool:
     return any(marker in text for marker in _QUOTA_MARKERS)
 
 
-def migrate_folder(
+def _plan_units(
+    src: MailConnection,
+    dst: MailConnection,
+    plans: list[FolderPlan],
+    state: MigrationState,
+    progress: TransferProgress,
+) -> list[tuple[FolderPlan, list[int]]]:
+    """Serial planning pass: record UIDVALIDITY, create missing destination
+    folders, and split every folder's UID list into work units.
+
+    A rejection here (e.g. namespace-invalid CREATE) fails this folder and
+    moves on — one bad folder must not kill the whole run.
+    """
+    units: list[tuple[FolderPlan, list[int]]] = []
+    for plan in plans:
+        try:
+            info = src.select_folder(plan.source, readonly=True)
+            state.set_uidvalidity(plan.source, info[b"UIDVALIDITY"])
+
+            if plan.create:
+                # folder_exists guard makes the create idempotent under retry.
+                dst.with_retry(
+                    lambda c, dest=plan.dest: None
+                    if c.folder_exists(dest)
+                    else c.create_folder(dest)
+                )
+
+            uids = src.with_retry(lambda c: c.search())
+        except Exception as exc:
+            progress.failed += 1
+            progress.failures.append(f"{plan.source}: {exc}")
+            continue
+        for i in range(0, len(uids), CHUNK_SIZE):
+            units.append((plan, uids[i : i + CHUNK_SIZE]))
+    return units
+
+
+def _process_unit(
     src: MailConnection,
     dst: MailConnection,
     plan: FolderPlan,
+    uids: list[int],
     state: MigrationState,
     progress: TransferProgress,
-    on_message: MessageCallback | None = None,
+    lock: threading.Lock,
+    stop: threading.Event,
+    on_message: MessageCallback | None,
 ) -> None:
-    # Folder setup: a rejection here (e.g. namespace-invalid CREATE) fails
-    # this folder and moves on — one bad folder must not kill the whole run.
-    # Only the setup phase is shielded: per-message errors have their own
-    # handling below, and state-persistence failures must keep propagating.
-    try:
-        info = src.select_folder(plan.source, readonly=True)
-        state.set_uidvalidity(plan.source, info[b"UIDVALIDITY"])
-
-        if plan.create:
-            # folder_exists guard makes the create idempotent under retry.
-            dst.with_retry(
-                lambda c: None if c.folder_exists(plan.dest) else c.create_folder(plan.dest)
-            )
-
-        uids = src.with_retry(lambda c: c.search())
-        if not uids:
-            return
-
-        # Cheap metadata pass for the whole folder — no bodies, memory stays flat.
-        meta = src.with_retry(lambda c: c.fetch(uids, _META_FIELDS))
-    except Exception as exc:
-        progress.failed += 1
-        progress.failures.append(f"{plan.source}: {exc}")
-        return
+    """Migrate one chunk of UIDs. State and progress mutations are guarded by
+    *lock*; network transfers run outside it so workers overlap on the wire."""
+    src.select_folder(plan.source, readonly=True)
+    # Cheap metadata pass for the chunk — no bodies, memory stays flat.
+    meta = src.with_retry(lambda c: c.fetch(uids, _META_FIELDS))
 
     for uid in uids:
+        if stop.is_set():
+            return
         m = meta.get(uid)
         if m is None:
             # Vanished between search() and fetch() (expunged mid-run):
             # nothing to copy, but the message was processed — count and report it.
-            progress.skipped += 1
+            with lock:
+                progress.skipped += 1
             if on_message is not None:
                 on_message(plan.source, uid)
             continue
         message_id = parse_message_id(m.get(_MID_KEY))
         try:
-            if state.is_migrated(plan.source, message_id, uid):
-                progress.skipped += 1
+            with lock:
+                already = state.is_migrated(plan.source, message_id, uid)
+            if already:
+                with lock:
+                    progress.skipped += 1
                 continue
             # Bodies fetched one at a time and released each iteration, so a
             # 50 MB attachment costs 50 MB, not the whole folder.
@@ -101,7 +134,8 @@ def migrate_folder(
             except Exception as exc:
                 # Quota classification applies only to the destination APPEND.
                 if is_quota_error(exc):
-                    state.flush()
+                    with lock:
+                        state.flush()
                     raise QuotaExceeded(
                         f"Destination mailbox is full — APPEND refused: {exc}"
                     ) from exc
@@ -109,16 +143,18 @@ def migrate_folder(
         except QuotaExceeded:
             raise
         except Exception as exc:
-            progress.failed += 1
-            progress.failures.append(
-                f"{plan.source} uid={uid} message_id={message_id}: {exc}"
-            )
+            with lock:
+                progress.failed += 1
+                progress.failures.append(
+                    f"{plan.source} uid={uid} message_id={message_id}: {exc}"
+                )
         else:
-            state.mark_migrated(plan.source, message_id, uid)
-            progress.migrated += 1
-            # A flush failure here propagates: state persistence is broken and
-            # continuing would silently un-dedup every following message.
-            state.flush()
+            with lock:
+                state.mark_migrated(plan.source, message_id, uid)
+                progress.migrated += 1
+                # A flush failure here propagates: state persistence is broken and
+                # continuing would silently un-dedup every following message.
+                state.flush()
         finally:
             if on_message is not None:
                 on_message(plan.source, uid)
@@ -130,11 +166,62 @@ def migrate(
     plans: list[FolderPlan],
     state: MigrationState,
     on_message: MessageCallback | None = None,
+    workers: int = 1,
 ) -> TransferProgress:
     progress = TransferProgress()
+    lock = threading.Lock()
+    stop = threading.Event()
     try:
-        for plan in plans:
-            migrate_folder(src, dst, plan, state, progress, on_message)
+        units = _plan_units(src, dst, plans, state, progress)
+        if not units:
+            return progress
+
+        if workers <= 1:
+            for plan, uids in units:
+                _process_unit(src, dst, plan, uids, state, progress, lock, stop, on_message)
+            return progress
+
+        # Each worker owns a private connection pair (IMAP sessions are not
+        # shareable across threads) and pulls chunks until the queue drains.
+        unit_queue: queue.Queue[tuple[FolderPlan, list[int]]] = queue.Queue()
+        for unit in units:
+            unit_queue.put(unit)
+        errors: list[Exception] = []
+
+        def run_worker() -> None:
+            wsrc = MailConnection(src.account, max_retries=src.max_retries)
+            wdst = MailConnection(dst.account, max_retries=dst.max_retries)
+            try:
+                while not stop.is_set():
+                    try:
+                        plan, uids = unit_queue.get_nowait()
+                    except queue.Empty:
+                        return
+                    _process_unit(
+                        wsrc, wdst, plan, uids, state, progress, lock, stop, on_message
+                    )
+            except Exception as exc:
+                stop.set()
+                with lock:
+                    errors.append(exc)
+            finally:
+                wsrc.close()
+                wdst.close()
+
+        threads = [
+            threading.Thread(target=run_worker, daemon=True)
+            for _ in range(min(workers, len(units)))
+        ]
+        for t in threads:
+            t.start()
+        try:
+            for t in threads:
+                t.join()
+        except BaseException:
+            stop.set()  # Ctrl-C: workers exit at their next message boundary
+            raise
+        if errors:
+            raise errors[0]
+        return progress
     finally:
-        state.flush()  # Ctrl-C / crash loses at most the in-flight message
-    return progress
+        state.flush()  # Ctrl-C / crash loses at most the in-flight messages

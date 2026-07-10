@@ -247,3 +247,69 @@ def test_folder_create_failure_skips_folder_run_continues(monkeypatch, tmp_path)
     assert progress.failed == 1
     assert "Bad" in progress.failures[0]
     assert len(dst_fake.folders["Good"]) == 1
+
+
+def test_parallel_workers_migrate_all_without_duplicates(monkeypatch, tmp_path):
+    from email_export_import import transfer
+
+    src_data = {
+        "A": [make_message(uid=i, message_id=f"<a{i}@x>") for i in range(1, 8)],
+        "B": [make_message(uid=i, message_id=f"<b{i}@x>") for i in range(1, 6)],
+    }
+    dst_fake = FakeIMAPClient(folders={"A": [], "B": []})
+
+    def factory(host, port=993, ssl=True, **kwargs):
+        if host == "src.test":
+            return FakeIMAPClient(folders=src_data)  # fresh session per connection
+        return dst_fake
+
+    monkeypatch.setattr(connection, "IMAPClient", factory)
+    monkeypatch.setattr(transfer, "CHUNK_SIZE", 3)  # force multiple units per folder
+
+    plans = [FolderPlan("A", "A", create=False), FolderPlan("B", "B", create=False)]
+    state = MigrationState(tmp_path / "s.json")
+    progress = migrate(MailConnection(SRC), MailConnection(DST), plans, state, workers=3)
+
+    assert (progress.migrated, progress.skipped, progress.failed) == (12, 0, 0)
+    assert len(dst_fake.folders["A"]) == 7
+    assert len(dst_fake.folders["B"]) == 5
+    ids = [m["body"] for f in ("A", "B") for m in dst_fake.folders[f]]
+    assert len(ids) == len(set(ids))  # no duplicates
+
+    # Re-run: everything skipped, nothing re-appended.
+    progress2 = migrate(
+        MailConnection(SRC), MailConnection(DST), plans,
+        MigrationState(tmp_path / "s.json"), workers=3,
+    )
+    assert (progress2.migrated, progress2.skipped) == (0, 12)
+    assert len(dst_fake.folders["A"]) == 7
+
+
+def test_parallel_quota_error_still_aborts(monkeypatch, tmp_path):
+    src_data = {"A": [make_message(uid=i, message_id=f"<a{i}@x>") for i in range(1, 6)]}
+    dst_fake = FakeIMAPClient(folders={"A": []})
+    dst_fake.append_error = IMAPClientError("APPEND failed [OVERQUOTA]")
+
+    def factory(host, port=993, ssl=True, **kwargs):
+        if host == "src.test":
+            return FakeIMAPClient(folders=src_data)
+        return dst_fake
+
+    monkeypatch.setattr(connection, "IMAPClient", factory)
+    state = MigrationState(tmp_path / "s.json")
+    with pytest.raises(QuotaExceeded):
+        migrate(
+            MailConnection(SRC), MailConnection(DST),
+            [FolderPlan("A", "A", create=False)], state, workers=2,
+        )
+
+
+def test_workers_one_uses_existing_connections(monkeypatch, tmp_path):
+    # Serial path must keep working exactly as before (default workers=1).
+    msg = make_message(uid=1, message_id="<a@x>")
+    src_fake = FakeIMAPClient(folders={"INBOX": [msg]})
+    dst_fake = FakeIMAPClient(folders={"INBOX": []})
+    src, dst = make_conns(monkeypatch, src_fake, dst_fake)
+    state = MigrationState(tmp_path / "s.json")
+    progress = migrate(src, dst, [FolderPlan("INBOX", "INBOX", create=False)], state)
+    assert progress.migrated == 1

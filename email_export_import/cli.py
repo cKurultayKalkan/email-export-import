@@ -210,6 +210,13 @@ def run(
         help="Verify the destination server's TLS certificate (disable only for trusted self-signed servers)",
     ),
     skip: Optional[str] = typer.Option(None, "--skip", help="Comma-separated source folders to skip (overrides preset default)"),
+    workers: int = typer.Option(
+        4,
+        "--workers",
+        min=1,
+        max=16,
+        help="Parallel IMAP connections (mind provider connection limits; 1 = serial)",
+    ),
     yes: bool = typer.Option(False, "--yes", help="No prompts; fail instead of asking"),
     state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="Override state directory (default ~/.email-export-import)"),
 ) -> None:
@@ -287,6 +294,7 @@ def run(
                 on_message=lambda folder, uid: progress_bar.update(
                     task, advance=1, description=folder
                 ),
+                workers=workers,
             )
     except KeyboardInterrupt:
         console.print("[yellow]Interrupted — progress saved. Run again with the same accounts to resume.[/yellow]")
