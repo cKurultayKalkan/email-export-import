@@ -82,6 +82,8 @@ class MigrationState:
         try:
             with os.fdopen(fd, "w") as fh:
                 fh.write(json.dumps(raw))
+                fh.flush()
+                os.fsync(fh.fileno())
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
