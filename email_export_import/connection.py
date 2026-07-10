@@ -34,6 +34,10 @@ class MailConnection:
         self.max_retries = max_retries
         self._client: IMAPClient | None = None
         self._selected: tuple[str, bool] | None = None  # (folder, readonly)
+        # Set after the first successful login. A later login rejection is
+        # then a transient server condition (rate limit, per-IP connection
+        # cap), not bad credentials, and with_retry() may retry it.
+        self._authenticated_once = False
 
     def connect(self) -> IMAPClient:
         kwargs = {}
@@ -76,6 +80,7 @@ class MailConnection:
                 f"Connection to {self.account.host}:{self.account.port} failed during login — {exc}"
             ) from exc
         self._client = client
+        self._authenticated_once = True
         if self._selected is not None:
             folder, readonly = self._selected
             client.select_folder(folder, readonly=readonly)
@@ -96,6 +101,14 @@ class MailConnection:
         for attempt in range(self.max_retries):
             try:
                 return fn(self.client)
+            except AuthFailed as exc:
+                # Only a reconnect's login can be rejected transiently; a
+                # first-time rejection is bad credentials — no retry.
+                if not self._authenticated_once:
+                    raise
+                last_exc = exc
+                self._client = None
+                time.sleep(min(2**attempt, 8))
             except (IMAPClientError, OSError) as exc:
                 last_exc = exc
                 self._client = None  # next .client access reconnects + reselects

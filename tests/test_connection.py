@@ -100,6 +100,43 @@ def test_with_retry_gives_up_after_max_retries(monkeypatch):
         conn.with_retry(always_fails)
 
 
+def test_with_retry_retries_login_rejected_on_reconnect(monkeypatch):
+    """Servers that rate-limit logins (fail2ban, per-IP caps) reject a
+    reconnect's LOGIN even though the password is correct. Once this
+    connection has authenticated successfully, a later rejection is
+    transient — retry it instead of failing the message."""
+    healthy = FakeIMAPClient(folders={"INBOX": []})
+    rejecting = FakeIMAPClient()
+    rejecting.login_error = LoginError("too many connections")
+    recovered = FakeIMAPClient(folders={"INBOX": []})
+    install_factory(monkeypatch, [healthy, rejecting, recovered])
+    conn = MailConnection(ACCOUNT)
+    conn.select_folder("INBOX")
+
+    attempts = []
+
+    def flaky(client):
+        attempts.append(client)
+        if client is healthy:
+            raise IMAPClientError("connection dropped")
+        return "ok"
+
+    assert conn.with_retry(flaky) == "ok"
+    assert attempts == [healthy, recovered]
+    assert recovered.select_calls == ["INBOX"]
+
+
+def test_with_retry_does_not_retry_first_login_rejection(monkeypatch):
+    """A rejection on the very first login means bad credentials —
+    surface it immediately, no retries."""
+    rejecting = FakeIMAPClient()
+    rejecting.login_error = LoginError("AUTHENTICATIONFAILED")
+    install_factory(monkeypatch, [rejecting])
+    conn = MailConnection(ACCOUNT)
+    with pytest.raises(AuthFailed):
+        conn.with_retry(lambda c: "ok")
+
+
 def test_generic_imap_error_during_login_raises_auth_failed(monkeypatch):
     fake = FakeIMAPClient()
     fake.login_error = IMAPClientError("BAD unexpected command")
