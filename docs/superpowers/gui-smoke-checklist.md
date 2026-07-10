@@ -10,6 +10,6 @@ Run before each release, on at least one platform:
 - [ ] Self-signed server raises the certificate dialog; Continue connects
 - [ ] Plan screen counts match the mailbox; unchecking a folder lowers the total
 - [ ] Progress advances (counter + bar + folder name)
-- [ ] Cancel stops within a few seconds; relaunching offers to resume
+- [ ] Cancel stops within a few seconds (may take up to a retry interval if the server is rate-limiting reconnects)
 - [ ] Done screen shows summary; failures listed when present
 - [ ] Killing the app mid-run and relaunching resumes without duplicates
