@@ -357,6 +357,13 @@ def run(
     )
     state.flush()
 
+    already_done = state.migrated_count()
+    if already_done:
+        console.print(
+            f"[dim]{already_done} messages already migrated — they will be "
+            "verified and skipped (headers only, no re-download).[/dim]"
+        )
+
     progress_bar = Progress(
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
@@ -389,8 +396,10 @@ def run(
         src_conn.close()
         dst_conn.close()
 
-    # Only a run that made it here finished cleanly — stop offering it for resume.
-    state.mark_completed()
+    # Only a fully clean run stops being offered for resume — a run with
+    # failures stays resumable so the failed messages get retried.
+    if result.failed == 0:
+        state.mark_completed()
     state.flush()
 
     summary = Table(title="Done")
@@ -403,3 +412,7 @@ def run(
         console.print("[red]Failed messages:[/red]")
         for line in result.failures:
             console.print(f"  [red]- {line}[/red]")
+        console.print(
+            "[yellow]Progress saved — run again and pick this session to "
+            "retry the failed messages.[/yellow]"
+        )

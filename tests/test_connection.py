@@ -126,6 +126,52 @@ def test_with_retry_retries_login_rejected_on_reconnect(monkeypatch):
     assert recovered.select_calls == ["INBOX"]
 
 
+def test_reconnect_login_rejections_use_long_backoff_then_give_up(monkeypatch):
+    """fail2ban-style login bans last minutes, far longer than the network
+    backoff — auth retries wait on their own long schedule, then give up."""
+    sleeps: list[float] = []
+    monkeypatch.setattr(connection.time, "sleep", lambda s: sleeps.append(s))
+    healthy = FakeIMAPClient(folders={"INBOX": []})
+    rejecting = []
+    for _ in range(len(connection.AUTH_RETRY_SLEEPS) + 1):
+        c = FakeIMAPClient()
+        c.login_error = LoginError("too many connections")
+        rejecting.append(c)
+    install_factory(monkeypatch, [healthy] + rejecting)
+    conn = MailConnection(ACCOUNT)
+
+    def drop_once(client):
+        if client is healthy:
+            raise IMAPClientError("connection dropped")
+        return "ok"
+
+    with pytest.raises(AuthFailed):
+        conn.with_retry(drop_once)
+    # One short network sleep, then the dedicated auth schedule.
+    assert sleeps[0] <= 8
+    assert sleeps[1:] == list(connection.AUTH_RETRY_SLEEPS)
+
+
+def test_with_retry_retries_connection_failed_on_reconnect(monkeypatch):
+    """A reconnect that cannot even reach the server (ConnectionFailed) is
+    as transient as a dropped command — retry it, don't kill the worker."""
+    healthy = FakeIMAPClient(folders={"INBOX": []})
+    recovered = FakeIMAPClient(folders={"INBOX": []})
+    install_factory(
+        monkeypatch, [healthy, socket.gaierror("temporary failure"), recovered]
+    )
+    conn = MailConnection(ACCOUNT)
+    conn.select_folder("INBOX")
+
+    def drop_once(client):
+        if client is healthy:
+            raise IMAPClientError("connection dropped")
+        return "ok"
+
+    assert conn.with_retry(drop_once) == "ok"
+    assert recovered.select_calls == ["INBOX"]
+
+
 def test_with_retry_does_not_retry_first_login_rejection(monkeypatch):
     """A rejection on the very first login means bad credentials —
     surface it immediately, no retries."""

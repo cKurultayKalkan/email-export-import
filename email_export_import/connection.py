@@ -19,6 +19,12 @@ T = TypeVar("T")
 # timeout applies per read, not per command.
 SOCKET_TIMEOUT = 60
 
+# Waits between retries when a reconnect's login is rejected. Servers that
+# rate-limit logins (fail2ban-style) ban for minutes, so the ordinary
+# exponential backoff (capped at 8s) never outlasts the ban — this schedule
+# does, without hammering the server with further login attempts.
+AUTH_RETRY_SLEEPS = (30, 60, 120, 300)
+
 
 class MailConnection:
     """Owns one IMAP session; reconnects and retries transient failures.
@@ -97,23 +103,27 @@ class MailConnection:
         return self.with_retry(lambda c: c.select_folder(folder, readonly=readonly))
 
     def with_retry(self, fn: Callable[[IMAPClient], T]) -> T:
-        last_exc: Exception = RuntimeError("unreachable")
-        for attempt in range(self.max_retries):
+        net_attempt = 0
+        auth_attempt = 0
+        while True:
             try:
                 return fn(self.client)
-            except AuthFailed as exc:
+            except AuthFailed:
                 # Only a reconnect's login can be rejected transiently; a
                 # first-time rejection is bad credentials — no retry.
-                if not self._authenticated_once:
+                if not self._authenticated_once or auth_attempt >= len(AUTH_RETRY_SLEEPS):
                     raise
-                last_exc = exc
                 self._client = None
-                time.sleep(min(2**attempt, 8))
-            except (IMAPClientError, OSError) as exc:
-                last_exc = exc
+                time.sleep(AUTH_RETRY_SLEEPS[auth_attempt])
+                auth_attempt += 1
+            except (IMAPClientError, OSError, ConnectionFailed):
+                # ConnectionFailed comes from connect() during a reconnect —
+                # as transient as the dropped command that triggered it.
+                net_attempt += 1
                 self._client = None  # next .client access reconnects + reselects
-                time.sleep(min(2**attempt, 8))
-        raise last_exc
+                if net_attempt >= self.max_retries:
+                    raise
+                time.sleep(min(2 ** (net_attempt - 1), 8))
 
     def close(self) -> None:
         if self._client is not None:

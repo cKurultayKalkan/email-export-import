@@ -315,6 +315,53 @@ def test_successful_run_saves_config_and_marks_completed(monkeypatch, tmp_path):
     assert "password" not in str(saved.config).lower()
 
 
+def test_run_with_failures_stays_resumable(monkeypatch, tmp_path):
+    from imapclient.exceptions import IMAPClientError
+
+    from email_export_import import connection as conn_mod
+    from email_export_import.state import MigrationState
+
+    monkeypatch.setattr(conn_mod.time, "sleep", lambda s: None)
+    src = FakeIMAPClient(folders={"INBOX": [make_message(uid=1, message_id="<a@x>")]})
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    dst.append_error = IMAPClientError("APPEND rejected")
+    install_hosts(monkeypatch, {"src.test": src, "dst.test": dst})
+
+    result = runner.invoke(
+        app,
+        base_args(["--state-dir", str(tmp_path)]),
+        env={"EEI_SRC_PASSWORD": "p1", "EEI_DST_PASSWORD": "p2"},
+    )
+    assert result.exit_code == 0, result.output
+
+    saved = MigrationState.for_pair("a@x.com", "b@y.com", base_dir=tmp_path)
+    assert saved.status != "completed"  # failed run must stay offered for resume
+    assert "retry" in result.output.lower()
+
+
+def test_resume_reports_already_migrated_count(monkeypatch, tmp_path):
+    from email_export_import.state import MigrationState
+
+    prior = MigrationState.for_pair("a@x.com", "b@y.com", base_dir=tmp_path)
+    prior.set_config(_session_config())
+    prior.mark_migrated("INBOX", "<a@x>", 1)
+    prior.flush()
+
+    src = FakeIMAPClient(folders={"INBOX": [make_message(uid=1, message_id="<a@x>")]})
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    install_hosts(monkeypatch, {"src.test": src, "dst.test": dst})
+
+    result = runner.invoke(
+        app,
+        ["--state-dir", str(tmp_path)],
+        env={"EEI_SRC_PASSWORD": "p1", "EEI_DST_PASSWORD": "p2"},
+        input="\ny\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "already migrated" in result.output
+    assert len(dst.folders["INBOX"]) == 0  # deduped, not re-uploaded
+
+
 def test_planning_survives_dropped_source_connection(monkeypatch, tmp_path):
     from imapclient.exceptions import IMAPClientAbortError
 
