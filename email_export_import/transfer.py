@@ -12,7 +12,7 @@ from .state import MigrationState
 # must never be set by a client.
 PRESERVED_FLAGS = (b"\\Seen", b"\\Answered", b"\\Flagged", b"\\Draft", b"\\Deleted")
 
-_QUOTA_MARKERS = ("quota", "overquota", "over quota", "exceeded")
+_QUOTA_MARKERS = ("quota",)
 
 # Fired after every processed message: (source_folder, uid).
 MessageCallback = Callable[[str, int], None]

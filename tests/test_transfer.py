@@ -191,6 +191,23 @@ def test_flush_failure_after_append_propagates_not_double_counts(monkeypatch, tm
     assert len(dst_fake.folders["INBOX"]) == 1  # appended once, not retried
 
 
+def test_oversized_message_is_per_message_failure_not_quota(monkeypatch, tmp_path):
+    msgs = [make_message(uid=1, message_id="<big@x>"), make_message(uid=2, message_id="<ok@x>")]
+    src_fake = FakeIMAPClient(folders={"INBOX": msgs})
+    dst_fake = FakeIMAPClient(folders={"INBOX": []})
+    real_append = dst_fake.append
+    def size_limited_append(folder, body, flags=(), msg_time=None):
+        if b"<big@x>" in body:
+            raise IMAPClientError("Maximum message size exceeded")
+        return real_append(folder, body, flags=flags, msg_time=msg_time)
+    dst_fake.append = size_limited_append
+    src, dst = make_conns(monkeypatch, src_fake, dst_fake)
+    state = MigrationState(tmp_path / "s.json")
+    progress = migrate(src, dst, [FolderPlan("INBOX", "INBOX", create=False)], state)
+    assert progress.failed == 1
+    assert progress.migrated == 1
+
+
 def test_vanished_uid_counts_skipped_and_fires_on_message(monkeypatch, tmp_path):
     msg = make_message(uid=1, message_id="<a@x>")
     src_fake = FakeIMAPClient(folders={"INBOX": [msg]})
