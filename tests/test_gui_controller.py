@@ -86,3 +86,100 @@ def test_build_plan_applies_namespace_and_skip(monkeypatch, tmp_path):
     assert by_source["Work"].dest == "INBOX.Work"
     assert plan.counts["INBOX"] == 1
     assert plan.total == 2
+
+
+def _wire_pair(monkeypatch, src_fake, dst_fake):
+    install(
+        monkeypatch,
+        lambda host, port=993, ssl=True, **kw: src_fake if host == "imap.test" else dst_fake,
+    )
+
+
+def test_runner_completes_and_marks_state(monkeypatch, tmp_path):
+    src_fake = FakeIMAPClient(
+        folders={"INBOX": [make_message(uid=i, message_id=f"<m{i}@x>") for i in (1, 2, 3)]}
+    )
+    dst_fake = FakeIMAPClient(folders={"INBOX": []})
+    _wire_pair(monkeypatch, src_fake, dst_fake)
+
+    c = Controller(state_dir=tmp_path)
+    src_conn = c.test_connection(ACCOUNT).conn
+    dst_acc = Account(host="dst.test", port=993, ssl=True, email="b@y", password="p")
+    dst_conn = c.test_connection(dst_acc).conn
+    plan = c.build_plan(src_conn, dst_conn, skip=set())
+    state = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+
+    c.start(src_conn, dst_conn, plan.plans, state, workers=1, total=plan.total)
+    c.join(timeout=10)
+
+    snap = c.snapshot()
+    assert snap.running is False
+    assert snap.error_kind is None
+    assert snap.result.migrated == 3
+    assert snap.processed == 3
+    assert len(dst_fake.folders["INBOX"]) == 3
+    # Session config saved (no passwords) and marked completed.
+    reloaded = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+    assert reloaded.status == "completed"
+    assert "password" not in str(reloaded.config).lower()
+
+
+def test_runner_cancel_leaves_session_resumable(monkeypatch, tmp_path):
+    import threading
+
+    msgs = [make_message(uid=i, message_id=f"<m{i}@x>") for i in range(1, 30)]
+    src_fake = FakeIMAPClient(folders={"INBOX": msgs})
+    dst_fake = FakeIMAPClient(folders={"INBOX": []})
+
+    gate = threading.Event()
+    real_append = dst_fake.append
+
+    def slow_append(folder, body, flags=(), msg_time=None):
+        gate.wait(timeout=5)  # hold until the test cancels
+        return real_append(folder, body, flags=flags, msg_time=msg_time)
+
+    dst_fake.append = slow_append
+    _wire_pair(monkeypatch, src_fake, dst_fake)
+
+    c = Controller(state_dir=tmp_path)
+    src_conn = c.test_connection(ACCOUNT).conn
+    dst_acc = Account(host="dst.test", port=993, ssl=True, email="b@y", password="p")
+    dst_conn = c.test_connection(dst_acc).conn
+    plan = c.build_plan(src_conn, dst_conn, skip=set())
+    state = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+
+    c.start(src_conn, dst_conn, plan.plans, state, workers=1, total=plan.total)
+    c.cancel()
+    gate.set()  # release the in-flight append
+    c.join(timeout=10)
+
+    snap = c.snapshot()
+    assert snap.running is False
+    assert snap.result.migrated < len(msgs)  # stopped early
+    reloaded = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+    assert reloaded.status == "running"  # still resumable
+
+
+def test_runner_quota_reports_error(monkeypatch, tmp_path):
+    from imapclient.exceptions import IMAPClientError
+
+    src_fake = FakeIMAPClient(
+        folders={"INBOX": [make_message(uid=1, message_id="<m1@x>")]}
+    )
+    dst_fake = FakeIMAPClient(folders={"INBOX": []})
+    dst_fake.append_error = IMAPClientError("APPEND failed [OVERQUOTA]")
+    _wire_pair(monkeypatch, src_fake, dst_fake)
+
+    c = Controller(state_dir=tmp_path)
+    src_conn = c.test_connection(ACCOUNT).conn
+    dst_acc = Account(host="dst.test", port=993, ssl=True, email="b@y", password="p")
+    dst_conn = c.test_connection(dst_acc).conn
+    plan = c.build_plan(src_conn, dst_conn, skip=set())
+    state = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+
+    c.start(src_conn, dst_conn, plan.plans, state, workers=1, total=plan.total)
+    c.join(timeout=10)
+
+    snap = c.snapshot()
+    assert snap.error_kind == "quota"
+    assert MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path).status == "running"

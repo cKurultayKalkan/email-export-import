@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..connection import MailConnection
-from ..errors import AuthFailed, CertificateVerifyFailed, ConnectionFailed
+from ..errors import AuthFailed, CertificateVerifyFailed, ConnectionFailed, QuotaExceeded
 from ..folders import build_folder_plan
-from ..models import Account, FolderPlan
+from ..models import Account, FolderPlan, TransferProgress
 from ..state import MigrationState
+from ..transfer import migrate
 
 
 @dataclass
@@ -25,6 +27,17 @@ class PlanResult:
     total: int
 
 
+@dataclass
+class RunSnapshot:
+    processed: int
+    total: int
+    current_folder: str | None
+    running: bool
+    result: TransferProgress | None = None
+    error_kind: str | None = None  # "quota" | "fatal"
+    error_message: str | None = None
+
+
 class Controller:
     """All GUI decisions live here; views only render what this returns.
 
@@ -33,6 +46,14 @@ class Controller:
 
     def __init__(self, state_dir: Path | None = None) -> None:
         self.state_dir = state_dir
+        self._run_lock = threading.Lock()
+        self._cancel = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._processed = 0
+        self._total = 0
+        self._current_folder: str | None = None
+        self._result: TransferProgress | None = None
+        self._error: tuple[str, str] | None = None
 
     def list_sessions(self) -> list[MigrationState]:
         return MigrationState.list_resumable(base_dir=self.state_dir)
@@ -80,3 +101,91 @@ class Controller:
             except Exception:
                 counts[p.source] = 0
         return PlanResult(plans=plans, counts=counts, total=sum(counts.values()))
+
+    def start(
+        self,
+        src_conn: MailConnection,
+        dst_conn: MailConnection,
+        plans: list[FolderPlan],
+        state: MigrationState,
+        workers: int,
+        total: int,
+        skip: set[str] | None = None,
+    ) -> None:
+        with self._run_lock:
+            self._cancel = threading.Event()
+            self._processed = 0
+            self._total = total
+            self._current_folder = None
+            self._result = None
+            self._error = None
+
+        state.set_config(
+            {
+                "src": self._account_config(src_conn.account),
+                "dst": self._account_config(dst_conn.account),
+                "skip": sorted(skip or set()),
+                "workers": workers,
+            }
+        )
+        state.flush()
+
+        def on_message(folder: str, uid: int) -> None:
+            with self._run_lock:
+                self._processed += 1
+                self._current_folder = folder
+
+        def run() -> None:
+            try:
+                result = migrate(
+                    src_conn, dst_conn, plans, state,
+                    on_message=on_message, workers=workers, cancel=self._cancel,
+                )
+                if not self._cancel.is_set():
+                    state.mark_completed()
+                    state.flush()
+                with self._run_lock:
+                    self._result = result
+            except QuotaExceeded as exc:
+                with self._run_lock:
+                    self._error = ("quota", str(exc))
+            except Exception as exc:
+                with self._run_lock:
+                    self._error = ("fatal", str(exc))
+            finally:
+                src_conn.close()
+                dst_conn.close()
+
+        self._thread = threading.Thread(target=run, daemon=True)
+        self._thread.start()
+
+    @staticmethod
+    def _account_config(account: Account) -> dict:
+        return {
+            "host": account.host,
+            "port": account.port,
+            "ssl": account.ssl,
+            "verify_ssl": account.verify_ssl,
+            "email": account.email,
+        }
+
+    def snapshot(self) -> RunSnapshot:
+        with self._run_lock:
+            running = self._thread is not None and self._thread.is_alive()
+            error_kind, error_message = self._error or (None, None)
+            return RunSnapshot(
+                processed=self._processed,
+                total=self._total,
+                current_folder=self._current_folder,
+                running=running,
+                result=self._result,
+                error_kind=error_kind,
+                error_message=error_message,
+            )
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def join(self, timeout: float | None = None) -> None:
+        if self._thread is not None:
+            self._thread.join(timeout)
