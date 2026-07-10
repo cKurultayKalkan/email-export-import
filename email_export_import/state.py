@@ -59,7 +59,7 @@ class MigrationState:
                 s = cls(path)
             except Exception:
                 continue
-            if s.status != "completed" and s.config is not None:
+            if s.status not in ("completed", "cancelled") and s.config is not None:
                 out.append(s)
         return out
 
@@ -68,6 +68,9 @@ class MigrationState:
 
     def mark_completed(self) -> None:
         self.status = "completed"
+
+    def mark_cancelled(self) -> None:
+        self.status = "cancelled"
 
     def migrated_count(self) -> int:
         return sum(

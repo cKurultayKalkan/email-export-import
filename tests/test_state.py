@@ -138,3 +138,28 @@ def test_old_format_state_still_loads(tmp_path):
     assert s.is_migrated("INBOX", "<a@x>", 1)
     assert s.status == "running"
     assert s.config is None
+
+
+def test_mark_cancelled_roundtrip(tmp_path):
+    path = tmp_path / "s.json"
+    s = MigrationState(path)
+    s.set_config({"src": {"host": "h"}})
+    s.mark_cancelled()
+    s.flush()
+    assert MigrationState(path).status == "cancelled"
+
+
+def test_list_resumable_excludes_cancelled(tmp_path):
+    base = tmp_path / "base"
+    cancelled = MigrationState.for_pair("a@x", "b@y", base_dir=base)
+    cancelled.set_config({"src": {"host": "h"}})
+    cancelled.mark_cancelled()
+    cancelled.flush()
+
+    running = MigrationState.for_pair("c@x", "d@y", base_dir=base)
+    running.set_config({"src": {"host": "h2"}})
+    running.flush()
+
+    resumable = MigrationState.list_resumable(base_dir=base)
+    assert len(resumable) == 1
+    assert resumable[0].config == {"src": {"host": "h2"}}
