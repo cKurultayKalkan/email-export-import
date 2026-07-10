@@ -100,6 +100,15 @@ def test_with_retry_gives_up_after_max_retries(monkeypatch):
         conn.with_retry(always_fails)
 
 
+def test_generic_imap_error_during_login_raises_auth_failed(monkeypatch):
+    fake = FakeIMAPClient()
+    fake.login_error = IMAPClientError("BAD unexpected command")
+    install_factory(monkeypatch, [fake])
+    conn = MailConnection(ACCOUNT)
+    with pytest.raises(AuthFailed):
+        conn.connect()
+
+
 def test_close_is_idempotent(monkeypatch):
     fake = FakeIMAPClient()
     install_factory(monkeypatch, [fake])

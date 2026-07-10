@@ -20,7 +20,7 @@ from .connection import MailConnection
 from .errors import MigrationError, QuotaExceeded
 from .folders import build_folder_plan
 from .models import Account, ProviderPreset
-from .providers import get_preset, list_presets
+from .providers import PRESETS, get_preset, list_presets
 from .state import MigrationState
 from .transfer import migrate
 
@@ -58,9 +58,17 @@ def _gather_account(
     password_env: str,
     interactive: bool,
 ) -> tuple[Account, ProviderPreset | None]:
+    prefix = "src" if role == "Source" else "dst"
     preset: ProviderPreset | None = None
     if preset_key is not None:
-        preset = get_preset(preset_key)
+        try:
+            preset = get_preset(preset_key)
+        except KeyError:
+            console.print(
+                f"[red]{role}: unknown preset '{preset_key}' "
+                f"(choose {'|'.join(PRESETS)})[/red]"
+            )
+            raise typer.Exit(code=1)
     elif host is None and interactive:
         preset = _choose_preset(role)
 
@@ -73,14 +81,16 @@ def _gather_account(
 
     if host is None:
         if not interactive:
-            console.print(f"[red]{role}: --host or --preset is required with --yes[/red]")
+            console.print(
+                f"[red]{role}: --{prefix}-host or --{prefix}-preset is required with --yes[/red]"
+            )
             raise typer.Exit(code=1)
         host = Prompt.ask(f"{role} IMAP host")
     if port is None:
         port = 993 if not interactive else IntPrompt.ask(f"{role} IMAP port", default=993)
     if email_addr is None:
         if not interactive:
-            console.print(f"[red]{role}: --email is required with --yes[/red]")
+            console.print(f"[red]{role}: --{prefix}-email is required with --yes[/red]")
             raise typer.Exit(code=1)
         email_addr = Prompt.ask(f"{role} email address")
     password = os.environ.get(password_env)

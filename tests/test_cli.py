@@ -128,3 +128,15 @@ def test_yes_without_password_env_fails_cleanly(tmp_path):
     )
     assert result.exit_code == 1
     assert "EEI_SRC_PASSWORD" in result.output
+
+
+def test_unknown_preset_fails_cleanly(tmp_path):
+    result = runner.invoke(
+        app,
+        ["--src-preset", "gmial", "--src-email", "a@x.com",
+         "--dst-host", "dst.test", "--dst-email", "b@y.com",
+         "--yes", "--state-dir", str(tmp_path)],
+        env={"EEI_SRC_PASSWORD": "p1", "EEI_DST_PASSWORD": "p2"},
+    )
+    assert result.exit_code == 1
+    assert "unknown preset 'gmial'" in result.output
