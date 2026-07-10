@@ -37,11 +37,18 @@ def build_folder_plan(
     src_listing: Listing,
     dst_listing: Listing,
     skip_folders: set[str] = frozenset(),
+    dst_prefix: str = "",
 ) -> list[FolderPlan]:
     """Map every selectable source folder onto a destination folder.
 
     Priority: skip-list > \\Noselect exclusion > SPECIAL-USE match >
     delimiter-translated 1:1 name (created if missing).
+
+    *dst_prefix* is the destination's personal-namespace prefix (e.g.
+    "INBOX." on Courier-style servers, where every folder must live under
+    INBOX). It is prepended to translated names — except INBOX itself and
+    names that already carry the prefix — so creates land inside the
+    namespace instead of being rejected by the server.
     """
     src_delim = _delimiter(src_listing)
     dst_delim = _delimiter(dst_listing)
@@ -64,5 +71,7 @@ def build_folder_plan(
             plans.append(FolderPlan(source=name, dest=dst_by_special[su], create=False))
             continue
         dest = translate_path(name, src_delim, dst_delim)
+        if dst_prefix and dest != "INBOX" and not dest.startswith(dst_prefix):
+            dest = dst_prefix + dest
         plans.append(FolderPlan(source=name, dest=dest, create=dest not in dst_names))
     return plans

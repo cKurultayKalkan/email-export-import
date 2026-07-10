@@ -211,3 +211,18 @@ def test_wizard_offers_retry_without_verification(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.output
     assert "man-in-the-middle" in result.output
     assert "verification disabled" in result.output
+
+
+def test_namespace_prefix_used_for_created_folders(monkeypatch, tmp_path):
+    src = FakeIMAPClient(folders={"Gelen Kutusu": [make_message(uid=1, message_id="<g@x>")]})
+    dst = FakeIMAPClient(folders={"INBOX": []}, delimiter=".", namespace_prefix="INBOX.")
+    install_hosts(monkeypatch, {"src.test": src, "dst.test": dst})
+
+    result = runner.invoke(
+        app,
+        base_args(["--state-dir", str(tmp_path)]),
+        env={"EEI_SRC_PASSWORD": "p1", "EEI_DST_PASSWORD": "p2"},
+    )
+    assert result.exit_code == 0, result.output
+    assert dst.folder_exists("INBOX.Gelen Kutusu")
+    assert len(dst.folders["INBOX.Gelen Kutusu"]) == 1

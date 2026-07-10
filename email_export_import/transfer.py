@@ -50,21 +50,30 @@ def migrate_folder(
     progress: TransferProgress,
     on_message: MessageCallback | None = None,
 ) -> None:
-    info = src.select_folder(plan.source, readonly=True)
-    state.set_uidvalidity(plan.source, info[b"UIDVALIDITY"])
+    # Folder setup: a rejection here (e.g. namespace-invalid CREATE) fails
+    # this folder and moves on — one bad folder must not kill the whole run.
+    # Only the setup phase is shielded: per-message errors have their own
+    # handling below, and state-persistence failures must keep propagating.
+    try:
+        info = src.select_folder(plan.source, readonly=True)
+        state.set_uidvalidity(plan.source, info[b"UIDVALIDITY"])
 
-    if plan.create:
-        # folder_exists guard makes the create idempotent under retry.
-        dst.with_retry(
-            lambda c: None if c.folder_exists(plan.dest) else c.create_folder(plan.dest)
-        )
+        if plan.create:
+            # folder_exists guard makes the create idempotent under retry.
+            dst.with_retry(
+                lambda c: None if c.folder_exists(plan.dest) else c.create_folder(plan.dest)
+            )
 
-    uids = src.with_retry(lambda c: c.search())
-    if not uids:
+        uids = src.with_retry(lambda c: c.search())
+        if not uids:
+            return
+
+        # Cheap metadata pass for the whole folder — no bodies, memory stays flat.
+        meta = src.with_retry(lambda c: c.fetch(uids, _META_FIELDS))
+    except Exception as exc:
+        progress.failed += 1
+        progress.failures.append(f"{plan.source}: {exc}")
         return
-
-    # Cheap metadata pass for the whole folder — no bodies, memory stays flat.
-    meta = src.with_retry(lambda c: c.fetch(uids, _META_FIELDS))
 
     for uid in uids:
         m = meta.get(uid)

@@ -49,6 +49,11 @@ EEI_SRC_PASSWORD=... EEI_DST_PASSWORD=... uv run email-export-import \
   runs, not within a dropped upload.
 - **Quota:** if the destination fills up, the run aborts immediately with
   a clear message; free space and re-run to resume.
+- **Folder namespaces:** servers that keep every folder under `INBOX.`
+  (Courier, many cPanel/Roundcube hosts) are handled automatically — the
+  tool reads the destination's NAMESPACE and prefixes created folders
+  accordingly. A folder that still fails to create is recorded and
+  skipped; the rest of the migration continues.
 - **Self-signed certificates:** if a server's TLS certificate cannot be
   verified, the wizard explains the risk and asks whether to continue
   without verification; non-interactive runs can pass

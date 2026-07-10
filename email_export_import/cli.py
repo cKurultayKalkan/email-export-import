@@ -158,6 +158,18 @@ def _connect(account: Account, role: str, interactive: bool) -> MailConnection:
             account.password = Prompt.ask("Password", password=True)
 
 
+def _namespace_prefix(conn: MailConnection) -> str:
+    """The server's personal-namespace prefix (e.g. 'INBOX.' on Courier),
+    or '' when the server has none or doesn't support NAMESPACE."""
+    try:
+        prefix, _sep = conn.client.namespace().personal[0]
+    except Exception:
+        return ""
+    if isinstance(prefix, bytes):
+        prefix = prefix.decode()
+    return prefix or ""
+
+
 def _folder_counts(conn: MailConnection, names: list[str]) -> dict[str, int]:
     counts = {}
     for name in names:
@@ -223,7 +235,10 @@ def run(
         skip_set = default_skip
 
     plans = build_folder_plan(
-        src_conn.client.list_folders(), dst_conn.client.list_folders(), skip_set
+        src_conn.client.list_folders(),
+        dst_conn.client.list_folders(),
+        skip_set,
+        dst_prefix=_namespace_prefix(dst_conn),
     )
     counts = _folder_counts(src_conn, [p.source for p in plans])
     total = sum(counts.values())

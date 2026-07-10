@@ -221,3 +221,29 @@ def test_vanished_uid_counts_skipped_and_fires_on_message(monkeypatch, tmp_path)
     assert progress.migrated == 1
     assert progress.skipped == 1
     assert seen == [1, 99]
+
+
+def test_folder_create_failure_skips_folder_run_continues(monkeypatch, tmp_path):
+    src_fake = FakeIMAPClient(folders={
+        "Bad": [make_message(uid=1, message_id="<bad@x>")],
+        "Good": [make_message(uid=2, message_id="<good@x>")],
+    })
+    dst_fake = FakeIMAPClient(folders={"INBOX": []})
+    real_create = dst_fake.create_folder
+    def failing_create(name):
+        if name == "Bad":
+            raise IMAPClientError(
+                "create failed: Client tried to access nonexistent namespace."
+            )
+        return real_create(name)
+    dst_fake.create_folder = failing_create
+    src, dst = make_conns(monkeypatch, src_fake, dst_fake)
+    state = MigrationState(tmp_path / "s.json")
+
+    plans = [FolderPlan("Bad", "Bad", create=True), FolderPlan("Good", "Good", create=True)]
+    progress = migrate(src, dst, plans, state)
+
+    assert progress.migrated == 1  # Good folder still migrated
+    assert progress.failed == 1
+    assert "Bad" in progress.failures[0]
+    assert len(dst_fake.folders["Good"]) == 1

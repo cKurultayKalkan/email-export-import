@@ -5,6 +5,7 @@ values in IMAPClient's shapes (bytes keys, (flags, delim, name) listings).
 """
 from __future__ import annotations
 
+import collections
 import email
 import itertools
 from datetime import datetime
@@ -41,6 +42,9 @@ def make_message(
     }
 
 
+Namespace = collections.namedtuple("Namespace", ["personal", "other", "shared"])
+
+
 class FakeIMAPClient:
     def __init__(
         self,
@@ -48,11 +52,13 @@ class FakeIMAPClient:
         special_use: dict[str, bytes] | None = None,
         delimiter: str = "/",
         uidvalidity: int = 1,
+        namespace_prefix: str = "",
     ) -> None:
         self.folders = {n: list(m) for n, m in (folders or {"INBOX": []}).items()}
         self.special_use = special_use or {}
         self.delimiter = delimiter
         self.uidvalidity = uidvalidity
+        self.namespace_prefix = namespace_prefix
         self.selected: str | None = None
         self.logged_in = False
         self.append_error: Exception | None = None
@@ -70,6 +76,11 @@ class FakeIMAPClient:
         self.logged_in = False
 
     # --- folders ---------------------------------------------------------
+    def namespace(self):
+        return Namespace(
+            personal=[(self.namespace_prefix, self.delimiter)], other=[], shared=[]
+        )
+
     def list_folders(self):
         out = []
         for name in self.folders:
