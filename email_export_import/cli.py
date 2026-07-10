@@ -220,7 +220,7 @@ def _namespace_prefix(conn: MailConnection) -> str:
     """The server's personal-namespace prefix (e.g. 'INBOX.' on Courier),
     or '' when the server has none or doesn't support NAMESPACE."""
     try:
-        prefix, _sep = conn.client.namespace().personal[0]
+        prefix, _sep = conn.with_retry(lambda c: c.namespace()).personal[0]
     except Exception:
         return ""
     if isinstance(prefix, bytes):
@@ -232,7 +232,9 @@ def _folder_counts(conn: MailConnection, names: list[str]) -> dict[str, int]:
     counts = {}
     for name in names:
         try:
-            counts[name] = conn.client.folder_status(name, [b"MESSAGES"])[b"MESSAGES"]
+            counts[name] = conn.with_retry(
+                lambda c, n=name: c.folder_status(n, [b"MESSAGES"])
+            )[b"MESSAGES"]
         except Exception:
             counts[name] = 0
     return counts
@@ -317,9 +319,11 @@ def run(
         else:
             skip_set = default_skip
 
+    # Planning runs after the user spent time in prompts — either session may
+    # have idled out server-side, so every planning call goes through with_retry.
     plans = build_folder_plan(
-        src_conn.client.list_folders(),
-        dst_conn.client.list_folders(),
+        src_conn.with_retry(lambda c: c.list_folders()),
+        dst_conn.with_retry(lambda c: c.list_folders()),
         skip_set,
         dst_prefix=_namespace_prefix(dst_conn),
     )

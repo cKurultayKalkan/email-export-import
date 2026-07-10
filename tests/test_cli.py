@@ -313,3 +313,35 @@ def test_successful_run_saves_config_and_marks_completed(monkeypatch, tmp_path):
     assert saved.status == "completed"
     assert saved.config["src"]["host"] == "src.test"
     assert "password" not in str(saved.config).lower()
+
+
+def test_planning_survives_dropped_source_connection(monkeypatch, tmp_path):
+    from imapclient.exceptions import IMAPClientAbortError
+
+    from email_export_import import connection as conn_mod
+
+    monkeypatch.setattr(conn_mod.time, "sleep", lambda s: None)
+
+    healthy = FakeIMAPClient(folders={"INBOX": [make_message(uid=1, message_id="<a@x>")]})
+    broken = FakeIMAPClient(folders={"INBOX": []})
+
+    def dead_list(*a, **k):
+        raise IMAPClientAbortError("socket error: [Errno 32] Broken pipe")
+
+    broken.list_folders = dead_list
+    src_clients = [broken]
+    dst = FakeIMAPClient(folders={"INBOX": []})
+
+    def factory(host, port=993, ssl=True, **kwargs):
+        if host == "src.test":
+            return src_clients.pop(0) if src_clients else healthy
+        return dst
+
+    monkeypatch.setattr(connection, "IMAPClient", factory)
+    result = runner.invoke(
+        app,
+        base_args(["--state-dir", str(tmp_path)]),
+        env={"EEI_SRC_PASSWORD": "p1", "EEI_DST_PASSWORD": "p2"},
+    )
+    assert result.exit_code == 0, result.output
+    assert len(dst.folders["INBOX"]) == 1
