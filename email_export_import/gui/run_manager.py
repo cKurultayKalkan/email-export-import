@@ -1,0 +1,214 @@
+"""One migration = one Run (own thread, own cancel event, lock-guarded
+snapshot). Deliberately flet-free so every path is unit-testable headless."""
+from __future__ import annotations
+
+import threading
+from dataclasses import dataclass
+from pathlib import Path
+
+from ..connection import MailConnection
+from ..errors import QuotaExceeded
+from ..models import FolderPlan, TransferProgress
+from ..spool import MessageSpool
+from ..state import MigrationState
+from ..transfer import migrate
+
+
+@dataclass
+class RunSnapshot:
+    key: str
+    title: str
+    status: str  # queued|running|paused|done|error|cancelled
+    processed: int
+    total: int
+    current_folder: str | None
+    error_kind: str | None = None  # "quota" | "fatal"
+    error_message: str | None = None
+    result: TransferProgress | None = None
+    spool_pending: int | None = None
+
+
+class Run:
+    """Single-shot migration lifecycle. Resume constructs a fresh Run for the
+    same key (dedup lives in the shared state file, not in this object)."""
+
+    def __init__(
+        self,
+        key: str,
+        title: str,
+        src_conn: MailConnection | None,
+        dst_conn: MailConnection | None,
+        plans: list[FolderPlan] | None,
+        state: MigrationState,
+        workers: int,
+        total: int,
+        skip: set[str] | None = None,
+        spool_enabled: bool = False,
+        state_dir: Path | None = None,
+    ) -> None:
+        self.key = key
+        self.title = title
+        self._src_conn = src_conn
+        self._dst_conn = dst_conn
+        self._plans = plans or []
+        self._state = state
+        self._workers = workers
+        self._skip = skip or set()
+        self._spool_enabled = spool_enabled
+        self._state_dir = state_dir
+
+        self._lock = threading.Lock()
+        self._cancel = threading.Event()
+        self._pausing = False
+        self._thread: threading.Thread | None = None
+        self._status = "queued"
+        self._processed = 0
+        self._total = total
+        self._current_folder: str | None = None
+        self._result: TransferProgress | None = None
+        self._error: tuple[str, str] | None = None
+        self._spool_pending: int | None = None
+
+    @classmethod
+    def placeholder(cls, state: MigrationState, state_dir: Path | None = None) -> "Run":
+        cfg = state.config or {}
+        src_email = cfg.get("src", {}).get("email", "?")
+        dst_email = cfg.get("dst", {}).get("email", "?")
+        run = cls(
+            key=state.path.stem,
+            title=f"{src_email} → {dst_email}",
+            src_conn=None,
+            dst_conn=None,
+            plans=None,
+            state=state,
+            workers=cfg.get("workers", 4),
+            total=cfg.get("total", 0),
+            skip=set(cfg.get("skip", [])),
+            spool_enabled=cfg.get("spool", False),
+            state_dir=state_dir,
+        )
+        run._status = "paused"
+        run._processed = state.migrated_count()
+        return run
+
+    @property
+    def is_active(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def state(self) -> MigrationState:
+        return self._state
+
+    def start(self) -> None:
+        if self.is_active or self._src_conn is None or self._dst_conn is None:
+            return
+        with self._lock:
+            self._status = "running"
+            self._pausing = False
+            self._cancel = threading.Event()
+            self._result = None
+            self._error = None
+
+        src_email = self._src_conn.account.email
+        dst_email = self._dst_conn.account.email
+        self._state.set_config(
+            {
+                "src": _account_config(self._src_conn.account),
+                "dst": _account_config(self._dst_conn.account),
+                "skip": sorted(self._skip),
+                "workers": self._workers,
+                "spool": self._spool_enabled,
+                "total": self._total,
+            }
+        )
+        self._state.flush()
+
+        spool = (
+            MessageSpool.for_pair(src_email, dst_email, base_dir=self._state_dir)
+            if self._spool_enabled
+            else None
+        )
+
+        def on_message(folder: str, uid: int) -> None:
+            with self._lock:
+                self._processed += 1
+                self._current_folder = folder
+
+        def run() -> None:
+            error: tuple[str, str] | None = None
+            result: TransferProgress | None = None
+            try:
+                result = migrate(
+                    self._src_conn, self._dst_conn, self._plans, self._state,
+                    on_message=on_message, workers=self._workers,
+                    cancel=self._cancel, spool=spool,
+                )
+            except QuotaExceeded as exc:
+                error = ("quota", str(exc))
+            except Exception as exc:
+                error = ("fatal", str(exc))
+            finally:
+                if spool is not None:
+                    with self._lock:
+                        self._spool_pending = spool.pending_count()
+                self._src_conn.close()
+                self._dst_conn.close()
+                with self._lock:
+                    self._result = result
+                    if error is not None:
+                        self._error = error
+                        self._status = "error"
+                    elif self._cancel.is_set():
+                        self._status = "paused" if self._pausing else "cancelled"
+                    else:
+                        self._status = "done"
+                if self._status == "done":
+                    self._state.mark_completed()
+                    self._state.flush()
+
+        self._thread = threading.Thread(target=run, daemon=True)
+        self._thread.start()
+
+    def pause(self) -> None:
+        with self._lock:
+            if self._status != "running":
+                return
+            self._pausing = True
+        self._cancel.set()
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._pausing = False
+            if not self.is_active:
+                self._status = "cancelled"
+        self._cancel.set()
+
+    def join(self, timeout: float | None = None) -> None:
+        if self._thread is not None:
+            self._thread.join(timeout)
+
+    def snapshot(self) -> RunSnapshot:
+        with self._lock:
+            error_kind, error_message = self._error or (None, None)
+            return RunSnapshot(
+                key=self.key,
+                title=self.title,
+                status=self._status,
+                processed=self._processed,
+                total=self._total,
+                current_folder=self._current_folder,
+                error_kind=error_kind,
+                error_message=error_message,
+                result=self._result,
+                spool_pending=self._spool_pending,
+            )
+
+
+def _account_config(account) -> dict:
+    return {
+        "host": account.host,
+        "port": account.port,
+        "ssl": account.ssl,
+        "verify_ssl": account.verify_ssl,
+        "email": account.email,
+    }
