@@ -47,6 +47,17 @@ def _page_main(page: ft.Page) -> None:
         except RuntimeError:
             pass  # page closed / control unmounted
 
+    def ui(fn):
+        """Marshal a callback onto the Flet page thread.
+
+        run_async delivers its result on a bare worker thread that lacks the
+        page context Flet needs for UI updates to render (page.run_thread sets
+        that context and hops onto the event loop; a raw thread does not). Every
+        run_async callback that touches the UI must go through here or its
+        dialogs / view changes silently never render.
+        """
+        return lambda *a, **k: page.run_thread(fn, *a, **k)
+
     # ---- dashboard ------------------------------------------------------
 
     def set_locale(locale: str) -> None:
@@ -106,8 +117,8 @@ def _page_main(page: ft.Page) -> None:
             page.pop_dialog()
             run_async(
                 lambda: _reconnect_and_build(cfg, src_pw, dst_pw),
-                on_done=lambda built: _start_resumed(key, run, cfg, built),
-                on_error=lambda exc: _show_error(str(exc)),
+                on_done=ui(lambda built: _start_resumed(key, run, cfg, built)),
+                on_error=ui(lambda exc: _show_error(str(exc))),
             )
 
         page.show_dialog(
@@ -263,8 +274,8 @@ def _page_main(page: ft.Page) -> None:
             handles["set_busy"](True)
             run_async(
                 lambda: controller.test_connection(account),
-                on_done=lambda result: _test_done(account, result),
-                on_error=lambda exc: _test_done(account, None, exc),
+                on_done=ui(lambda result: _test_done(account, result)),
+                on_error=ui(lambda exc: _test_done(account, None, exc)),
             )
 
         def _test_done(account: Account, result, exc: Exception | None = None) -> None:
@@ -324,8 +335,8 @@ def _page_main(page: ft.Page) -> None:
 
         run_async(
             lambda: controller.build_plan(ws.src_conn, ws.dst_conn, ws.skip),
-            on_done=plan_ready,
-            on_error=lambda exc: _show_error(str(exc)),
+            on_done=ui(plan_ready),
+            on_error=ui(lambda exc: _show_error(str(exc))),
         )
 
     def _render_plan() -> None:
