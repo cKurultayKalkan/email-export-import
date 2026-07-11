@@ -1,4 +1,4 @@
-# email-export-import
+# Email Export - Import Tool - CLI & Desktop
 
 Move a whole mailbox from one IMAP server to another — **folders, read/starred
 flags, original dates, and attachments preserved** — from a command line or a
