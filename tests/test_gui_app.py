@@ -16,6 +16,7 @@ def test_wizard_state_defaults():
     assert ws.workers == 4
     assert ws.skip == set()
     assert ws.spool is False
+    assert not hasattr(ws, "resume_session")
 
 
 def test_view_builders_set_route_and_controls():

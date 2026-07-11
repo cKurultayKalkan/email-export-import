@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 import flet as ft
@@ -7,8 +8,10 @@ import flet as ft
 from ..models import Account
 from ..state import MigrationState
 from . import views
-from .controller import Controller, PlanResult
+from .async_ops import run_async
+from .controller import Controller
 from .i18n import I18n
+from .run_manager import Run, RunManager
 
 
 @dataclass
@@ -17,11 +20,10 @@ class WizardState:
     dst_account: Account | None = None
     src_conn: object = None
     dst_conn: object = None
-    plan: PlanResult | None = None
+    plan: object = None
     skip: set[str] = field(default_factory=set)
     workers: int = 4
     spool: bool = False
-    resume_session: MigrationState | None = None
 
 
 def main() -> None:
@@ -31,63 +33,206 @@ def main() -> None:
 def _page_main(page: ft.Page) -> None:
     i18n = I18n()
     controller = Controller()
+    manager = RunManager()
+    manager.load_resumable()
     ws = WizardState()
+    highlight: list[str | None] = [None]
     page.title = i18n.t("app.title")
-    page.window.width = 760
-    page.window.height = 640
+    page.window.width = 820
+    page.window.height = 680
 
     def close_window() -> None:
-        # Window.close() is async in the installed Flet version; on_click
-        # handlers here are plain sync callables, so schedule it as a task
-        # instead of calling (and discarding) the coroutine directly.
         page.run_task(page.window.close)
+
+    def safe_update(control) -> None:
+        try:
+            control.update()
+        except RuntimeError:
+            pass  # page closed / control unmounted
+
+    # ---- dashboard ------------------------------------------------------
 
     def set_locale(locale: str) -> None:
         i18n.set_locale(locale)
-        go_welcome()
+        show_dashboard()
 
-    def go_welcome() -> None:
+    def show_dashboard() -> None:
+        page.views.clear()
+        page.views.append(_dashboard_view())
+        page.update()
+
+    def _dashboard_view() -> ft.View:
+        return views.build_dashboard(
+            i18n, manager.snapshot_all(),
+            on_new=start_wizard, on_pause=do_pause, on_resume=ask_resume,
+            on_cancel=do_cancel, on_detail=show_detail, on_dismiss=do_dismiss,
+            on_locale=set_locale, highlight_key=highlight[0],
+        )
+
+    def do_pause(key: str) -> None:
+        run = manager.get(key)
+        if run is not None:
+            run.pause()
+        refresh_current()
+
+    def do_cancel(key: str) -> None:
+        run = manager.get(key)
+        if run is not None:
+            run.cancel()
+        refresh_current()
+
+    def do_dismiss(key: str) -> None:
+        manager.remove(key)
+        show_dashboard()
+
+    # ---- resume ---------------------------------------------------------
+
+    def ask_resume(key: str) -> None:
+        run = manager.get(key)
+        if run is None:
+            return
+        cfg = run.state.config or {}
+
+        def submit(src_pw: str, dst_pw: str) -> None:
+            page.pop_dialog()
+            run_async(
+                lambda: _reconnect_and_build(cfg, src_pw, dst_pw),
+                on_done=lambda built: _start_resumed(key, run, cfg, built),
+                on_error=lambda exc: _show_error(str(exc)),
+            )
+
+        page.show_dialog(
+            views.build_password_dialog(i18n, run.title, submit, lambda: page.pop_dialog())
+        )
+
+    def _reconnect_and_build(cfg: dict, src_pw: str, dst_pw: str):
+        src = _account_from_cfg(cfg["src"], src_pw, "EEI_SRC_PASSWORD")
+        dst = _account_from_cfg(cfg["dst"], dst_pw, "EEI_DST_PASSWORD")
+        src_result = controller.test_connection(src)
+        if not src_result.ok:
+            raise RuntimeError(src_result.message or "source connection failed")
+        dst_result = controller.test_connection(dst)
+        if not dst_result.ok:
+            raise RuntimeError(dst_result.message or "destination connection failed")
+        plan = controller.build_plan(
+            src_result.conn, dst_result.conn, set(cfg.get("skip", []))
+        )
+        return src_result.conn, dst_result.conn, plan
+
+    def _start_resumed(key: str, old_run: Run, cfg: dict, built) -> None:
+        src_conn, dst_conn, plan = built
+        run = Run(
+            key=key, title=old_run.title, src_conn=src_conn, dst_conn=dst_conn,
+            plans=plan.plans, state=old_run.state, workers=cfg.get("workers", 2),
+            total=plan.total, skip=set(cfg.get("skip", [])),
+            spool_enabled=cfg.get("spool", False),
+        )
+        manager.add(run)
+        run.start()
+        show_dashboard()
+
+    def _account_from_cfg(cfg: dict, password: str, env_var: str) -> Account:
+        import os
+
+        return Account(
+            host=cfg["host"], port=cfg["port"], ssl=cfg["ssl"], email=cfg["email"],
+            password=password or os.environ.get(env_var, ""),
+            verify_ssl=cfg.get("verify_ssl", True),
+        )
+
+    def _show_error(message: str) -> None:
+        page.show_dialog(
+            ft.AlertDialog(title=ft.Text(i18n.t("status.error")), content=ft.Text(message))
+        )
+
+    # ---- detail ---------------------------------------------------------
+
+    detail_key: list[str | None] = [None]
+
+    def show_detail(key: str) -> None:
+        detail_key[0] = key
+        run = manager.get(key)
+        if run is None:
+            show_dashboard()
+            return
         page.views.clear()
         page.views.append(
-            views.build_welcome(
-                i18n, controller.list_sessions(), on_resume=resume_session,
-                on_new=lambda: go_account("source"), on_locale=set_locale,
+            views.build_detail(
+                i18n, run.snapshot(), on_pause=do_pause, on_resume=ask_resume,
+                on_cancel=do_cancel, on_back=back_to_dashboard,
             )
         )
         page.update()
 
-    def resume_session(session: MigrationState) -> None:
-        ws.resume_session = session
-        cfg = session.config or {}
-        ws.workers = cfg.get("workers", 4)
-        ws.skip = set(cfg.get("skip", []))
-        ws.spool = cfg.get("spool", False)
-        go_account("source", prefill=cfg.get("src", {}))
+    def back_to_dashboard() -> None:
+        detail_key[0] = None
+        show_dashboard()
+
+    def refresh_current() -> None:
+        if detail_key[0] is not None:
+            show_detail(detail_key[0])
+        else:
+            show_dashboard()
+
+    # ---- background poll ------------------------------------------------
+
+    def poll() -> None:
+        while True:
+            time.sleep(0.2)
+            try:
+                route = page.views[-1].route if page.views else None
+                if route == "/":
+                    page.views[-1] = _dashboard_view()
+                    page.update()
+                elif route == "/detail" and detail_key[0] is not None:
+                    run = manager.get(detail_key[0])
+                    if run is not None:
+                        page.views[-1] = views.build_detail(
+                            i18n, run.snapshot(), on_pause=do_pause,
+                            on_resume=ask_resume, on_cancel=do_cancel,
+                            on_back=back_to_dashboard,
+                        )
+                        page.update()
+            except RuntimeError:
+                return  # page closed
+
+    # ---- wizard ---------------------------------------------------------
+
+    def start_wizard() -> None:
+        nonlocal ws
+        ws = WizardState()
+        go_account("source")
 
     def go_account(role: str, prefill: dict | None = None) -> None:
         status = ft.Text("")
         initial = dict(prefill or {})
         if role == "dest" and ws.src_account and not initial.get("email"):
             initial["email"] = ws.src_account.email
-        if ws.resume_session and role == "dest" and not prefill:
-            initial = dict((ws.resume_session.config or {}).get("dst", {}))
-            initial.setdefault("email", ws.src_account.email if ws.src_account else "")
+
+        handles: dict = {}
 
         def on_test(account: Account) -> None:
             status.value = i18n.t("account.testing")
-            status.update()
-            result = controller.test_connection(account)
+            safe_update(status)
+            handles["set_busy"](True)
+            run_async(
+                lambda: controller.test_connection(account),
+                on_done=lambda result: _test_done(account, result),
+                on_error=lambda exc: _test_done(account, None, exc),
+            )
+
+        def _test_done(account: Account, result, exc: Exception | None = None) -> None:
+            handles["set_busy"](False)
+            if exc is not None:
+                status.value = str(exc)
+                safe_update(status)
+                return
             if result.ok:
                 status.value = i18n.t("account.connected")
-                status.update()
+                safe_update(status)
                 if role == "source":
                     ws.src_account, ws.src_conn = account, result.conn
-                    if ws.resume_session is None:
-                        # New migration: seed the skip list from the source
-                        # preset (e.g. Gmail's duplicate label views) so it
-                        # doesn't have to be discovered the hard way — a
-                        # doubled mailbox. Resume keeps its saved skip list.
-                        ws.skip = controller.default_skip(handles["preset_key"]())
+                    ws.skip = controller.default_skip(handles["preset_key"]())
                     go_account("dest")
                 else:
                     ws.dst_account, ws.dst_conn = account, result.conn
@@ -96,13 +241,13 @@ def _page_main(page: ft.Page) -> None:
                 _cert_dialog(account)
             else:
                 status.value = i18n.t(f"error.{result.kind}")
-                status.update()
+                safe_update(status)
 
         def _cert_dialog(account: Account) -> None:
             def retry_unverified(e) -> None:
                 page.pop_dialog()
                 account.verify_ssl = False
-                on_test(account)
+                on_test(account)  # async again — no UI freeze
 
             dialog = ft.AlertDialog(
                 modal=True,
@@ -116,26 +261,32 @@ def _page_main(page: ft.Page) -> None:
             page.show_dialog(dialog)
 
         def on_back() -> None:
-            go_welcome() if role == "source" else go_account("source")
+            back_to_dashboard() if role == "source" else go_account("source")
 
-        view, handles = views.build_account(i18n, role, initial, on_test, on_back, status)
+        view, view_handles = views.build_account(i18n, role, initial, on_test, on_back, status)
+        handles.update(view_handles)
         page.views.clear()
         page.views.append(view)
         page.update()
 
     def go_plan() -> None:
-        ws.plan = controller.build_plan(ws.src_conn, ws.dst_conn, ws.skip)
+        ws.workers = manager.default_workers()
 
+        def plan_ready(plan) -> None:
+            ws.plan = plan
+            _render_plan()
+
+        run_async(
+            lambda: controller.build_plan(ws.src_conn, ws.dst_conn, ws.skip),
+            on_done=plan_ready,
+            on_error=lambda exc: _show_error(str(exc)),
+        )
+
+    def _render_plan() -> None:
         def on_toggle(source: str, included: bool) -> None:
             (ws.skip.discard if included else ws.skip.add)(source)
-            go_plan_refresh()
-
-        def go_plan_refresh() -> None:
-            page.views[-1] = views.build_plan(
-                i18n, ws.plan, ws.skip, ws.workers, ws.spool,
-                on_toggle, on_workers, on_spool, start_migration,
-                lambda: go_account("dest"),
-            )
+            # counts change → rebuild
+            page.views[-1] = _plan_view()
             page.update()
 
         def on_workers(n: int) -> None:
@@ -144,55 +295,40 @@ def _page_main(page: ft.Page) -> None:
         def on_spool(enabled: bool) -> None:
             ws.spool = enabled
 
-        page.views.clear()
-        page.views.append(
-            views.build_plan(
+        def _plan_view() -> ft.View:
+            return views.build_plan(
                 i18n, ws.plan, ws.skip, ws.workers, ws.spool,
                 on_toggle, on_workers, on_spool, start_migration,
                 lambda: go_account("dest"),
             )
-        )
+
+        page.views.clear()
+        page.views.append(_plan_view())
         page.update()
 
     def start_migration() -> None:
+        key = f"{ws.src_account.email}__{ws.dst_account.email}"
+        existing = manager.get(key)
+        if existing is not None and existing.is_active:
+            highlight[0] = key
+            back_to_dashboard()
+            return
         active_plans = [p for p in ws.plan.plans if p.source not in ws.skip]
         total = sum(ws.plan.counts.get(p.source, 0) for p in active_plans)
-        state = ws.resume_session or MigrationState.for_pair(
-            ws.src_account.email, ws.dst_account.email
+        state = MigrationState.for_pair(ws.src_account.email, ws.dst_account.email)
+        run = Run(
+            key=key, title=f"{ws.src_account.email} → {ws.dst_account.email}",
+            src_conn=ws.src_conn, dst_conn=ws.dst_conn, plans=active_plans,
+            state=state, workers=ws.workers, total=total, skip=ws.skip,
+            spool_enabled=ws.spool,
         )
-        controller.start(ws.src_conn, ws.dst_conn, active_plans, state,
-                         workers=ws.workers, total=total, skip=ws.skip,
-                         spool=ws.spool)
-        go_progress(total)
+        manager.add(run)
+        run.start()
+        highlight[0] = key
+        back_to_dashboard()
 
-    def go_progress(total: int) -> None:
-        view, bar, counter, folder = views.build_progress(i18n, on_cancel=controller.cancel)
-        page.views.clear()
-        page.views.append(view)
-        page.update()
-
-        import time
-
-        def poll() -> None:
-            while True:
-                snap = controller.snapshot()
-                bar.value = (snap.processed / snap.total) if snap.total else 0
-                counter.value = f"{snap.processed} / {snap.total}"
-                folder.value = snap.current_folder or ""
-                try:
-                    bar.update(); counter.update(); folder.update()
-                except RuntimeError:
-                    return  # page closed / controls unmounted
-                if not snap.running:
-                    page.views.clear()
-                    page.views.append(views.build_done(i18n, snap, on_close=close_window))
-                    page.update()
-                    return
-                time.sleep(0.1)
-
-        page.run_thread(poll)
-
-    go_welcome()
+    show_dashboard()
+    page.run_thread(poll)
 
 
 if __name__ == "__main__":
