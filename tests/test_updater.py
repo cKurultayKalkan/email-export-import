@@ -93,3 +93,21 @@ def test_download_rejects_bad_checksum(tmp_path):
     with pytest.raises(ChecksumMismatch):
         download_asset(info, tmp_path, opener=lambda url: io.BytesIO(payload))
     assert not (tmp_path / "email-export-import-linux.zip").exists()
+
+
+def test_default_fetchers_reject_non_github_or_http_url():
+    from email_export_import.gui.updater import _require_https_github
+
+    _require_https_github("https://github.com/x/y/releases/download/v1/a.zip")
+    _require_https_github("https://objects.githubusercontent.com/asset")
+    for bad in ("http://github.com/x", "https://evil.example.com/a.zip",
+                "file:///etc/passwd", "https://github.com.evil.com/a"):
+        with pytest.raises(ValueError):
+            _require_https_github(bad)
+
+
+def test_download_rejects_unsafe_asset_name(tmp_path):
+    for bad in ("../escape.zip", "/abs/path.zip", ""):
+        info = UpdateInfo(version="v1", asset_url="https://x", asset_name=bad, sha256="0")
+        with pytest.raises(ValueError):
+            download_asset(info, tmp_path, opener=lambda url: io.BytesIO(b"x"))

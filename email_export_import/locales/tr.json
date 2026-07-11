@@ -85,5 +85,6 @@
   "update.up_to_date": "En son sürümü kullanıyorsunuz.",
   "update.downloading": "Güncelleme indiriliyor…",
   "update.failed": "Güncelleme başarısız — lütfen sürümler sayfasından elle indirin.",
-  "update.ready": "Kurulum açıldı. Güncellemeyi tamamlamak için uygulamayı kapatın."
+  "update.ready": "Kurulum açıldı. Güncellemeyi tamamlamak için uygulamayı kapatın.",
+  "update.close": "Kapat"
 }

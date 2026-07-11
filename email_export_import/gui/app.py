@@ -214,6 +214,7 @@ def _page_main(page: ft.Page) -> None:
         )
 
     def _on_update_checked(info, manual: bool) -> None:
+        page.pop_dialog()  # clear the "checking…" dialog if it was shown
         if info is None:
             if manual:
                 _info_dialog(i18n.t("update.up_to_date"))
@@ -240,15 +241,20 @@ def _page_main(page: ft.Page) -> None:
         )
 
     def _update_downloaded(path) -> None:
-        updater.open_installer(path)
+        try:
+            updater.open_installer(path)
+        except Exception:
+            _info_dialog(i18n.t("update.failed"))
+            return
         _info_dialog(i18n.t("update.ready"))
 
     def _info_dialog(message: str) -> None:
+        page.pop_dialog()  # never stack over a previous update dialog
         page.show_dialog(
             ft.AlertDialog(
                 title=ft.Text(i18n.t("app.title")),
                 content=ft.Text(message),
-                actions=[ft.TextButton(i18n.t("update.later"), on_click=lambda e: page.pop_dialog())],
+                actions=[ft.TextButton(i18n.t("update.close"), on_click=lambda e: page.pop_dialog())],
             )
         )
 

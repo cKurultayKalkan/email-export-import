@@ -53,19 +53,40 @@ def platform_asset_suffix() -> str:
     return "-linux.zip"
 
 
+_ALLOWED_HOSTS = ("github.com", "api.github.com", "objects.githubusercontent.com")
+
+
+def _require_https_github(url: str) -> str:
+    """Reject any URL that is not HTTPS on a GitHub host. The updater only ever
+    fetches from the GitHub API and release assets; enforcing it here means even
+    a tampered release JSON can't point the downloader at http:// or file:// or
+    an attacker's host."""
+    from urllib.parse import urlparse
+
+    p = urlparse(url)
+    host = p.hostname or ""
+    if p.scheme != "https" or not (
+        host in _ALLOWED_HOSTS or host.endswith(".githubusercontent.com")
+    ):
+        raise ValueError(f"refusing non-GitHub/HTTPS URL: {url!r}")
+    return url
+
+
 def _urlopen_json(url: str) -> dict:
-    req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
-    with urllib.request.urlopen(req, timeout=15) as r:  # noqa: S310 (https only)
+    req = urllib.request.Request(
+        _require_https_github(url), headers={"Accept": "application/vnd.github+json"}
+    )
+    with urllib.request.urlopen(req, timeout=15) as r:  # noqa: S310
         return json.loads(r.read().decode())
 
 
 def _urlopen_text(url: str) -> str:
-    with urllib.request.urlopen(url, timeout=15) as r:  # noqa: S310
+    with urllib.request.urlopen(_require_https_github(url), timeout=15) as r:  # noqa: S310
         return r.read().decode()
 
 
 def _urlopen_bytes(url: str):
-    return urllib.request.urlopen(url, timeout=60)  # noqa: S310
+    return urllib.request.urlopen(_require_https_github(url), timeout=60)  # noqa: S310
 
 
 def _sha_for(sums_text: str, name: str) -> str | None:
@@ -104,6 +125,8 @@ def check_for_update(
 
 
 def download_asset(info: UpdateInfo, dest_dir: Path, *, opener=_urlopen_bytes) -> Path:
+    if not info.asset_name or Path(info.asset_name).name != info.asset_name:
+        raise ValueError(f"unsafe asset name: {info.asset_name!r}")
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / info.asset_name
     h = hashlib.sha256()
