@@ -21,6 +21,7 @@
   "resume.src_password": "Source password",
   "resume.dst_password": "Destination password",
   "resume.go": "Resume",
+  "resume.cancel": "Cancel",
   "detail.back": "Back",
   "account.source_title": "Old mail account (source)",
   "account.dest_title": "New mail account (destination)",

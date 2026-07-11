@@ -391,7 +391,7 @@ def build_password_dialog(
         title=ft.Text(i18n.t("resume.title")),
         content=ft.Column([ft.Text(title, size=12), src_pw, dst_pw], tight=True, spacing=8),
         actions=[
-            ft.TextButton(i18n.t("cert.cancel"), on_click=lambda e: on_cancel()),
+            ft.TextButton(i18n.t("resume.cancel"), on_click=lambda e: on_cancel()),
             ft.FilledButton(
                 i18n.t("resume.go"),
                 on_click=lambda e: on_submit(src_pw.value or "", dst_pw.value or ""),

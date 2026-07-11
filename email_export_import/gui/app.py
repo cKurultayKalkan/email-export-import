@@ -41,9 +41,6 @@ def _page_main(page: ft.Page) -> None:
     page.window.width = 820
     page.window.height = 680
 
-    def close_window() -> None:
-        page.run_task(page.window.close)
-
     def safe_update(control) -> None:
         try:
             control.update()
@@ -133,7 +130,7 @@ def _page_main(page: ft.Page) -> None:
         src_conn, dst_conn, plan = built
         run = Run(
             key=key, title=old_run.title, src_conn=src_conn, dst_conn=dst_conn,
-            plans=plan.plans, state=old_run.state, workers=cfg.get("workers", 2),
+            plans=plan.plans, state=old_run.state, workers=manager.default_workers(),
             total=plan.total, skip=set(cfg.get("skip", [])),
             spool_enabled=cfg.get("spool", False),
         )

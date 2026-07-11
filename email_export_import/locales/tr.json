@@ -21,6 +21,7 @@
   "resume.src_password": "Kaynak parolası",
   "resume.dst_password": "Hedef parolası",
   "resume.go": "Devam et",
+  "resume.cancel": "İptal",
   "detail.back": "Geri",
   "account.source_title": "Eski posta hesabı (kaynak)",
   "account.dest_title": "Yeni posta hesabı (hedef)",
