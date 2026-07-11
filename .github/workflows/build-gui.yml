@@ -39,7 +39,10 @@ jobs:
           PYTHONIOENCODING: "utf-8"
         run: |
           uv sync --extra gui
-          # `yes` answers flet's "install required Flutter? [y/n]" prompt non-interactively.
+          # `yes` answers flet's "install required Flutter? [y/n]" prompt. It
+          # gets SIGPIPE when flet exits; disable pipefail so the step's result
+          # is flet build's exit code, not yes's broken pipe.
+          set +o pipefail
           yes | uv run flet build ${{ matrix.target }} --project email-export-import
       - name: Package bundle
         shell: bash
