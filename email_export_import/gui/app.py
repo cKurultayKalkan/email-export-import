@@ -215,6 +215,7 @@ def _page_main(page: ft.Page) -> None:
                             safe_update(entry["counter"])
                             if entry["bar"] is not None:
                                 safe_update(entry["bar"])
+                        page.update()  # also the liveness probe: raises once the page is gone
                     elif page.views and page.views[-1].route == "/":
                         # Card set or a status changed — buttons differ, so a
                         # full rebuild is correct (and rare).
@@ -232,6 +233,7 @@ def _page_main(page: ft.Page) -> None:
                                 safe_update(entry["folder"])
                                 if entry["bar"] is not None:
                                     safe_update(entry["bar"])
+                            page.update()  # liveness probe: raises once the page is gone
                         elif page.views and page.views[-1].route == "/detail":
                             page.views[-1] = _detail_view(snap)
                             page.update()
