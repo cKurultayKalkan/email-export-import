@@ -60,6 +60,7 @@ class Run:
         self._lock = threading.Lock()
         self._cancel = threading.Event()
         self._pausing = False
+        self._stop_requested = False
         self._thread: threading.Thread | None = None
         self._status = "queued"
         self._processed = 0
@@ -105,6 +106,7 @@ class Run:
         with self._lock:
             self._status = "running"
             self._pausing = False
+            self._stop_requested = False
             self._cancel = threading.Event()
             self._result = None
             self._error = None
@@ -171,9 +173,10 @@ class Run:
 
     def pause(self) -> None:
         with self._lock:
-            if self._status != "running":
+            if self._status != "running" or self._stop_requested:
                 return
             self._pausing = True
+            self._stop_requested = True
         self._cancel.set()
 
     def cancel(self) -> None:
@@ -181,6 +184,7 @@ class Run:
             if self._status in ("done", "error", "cancelled"):
                 return  # terminal — nothing to cancel
             self._pausing = False
+            self._stop_requested = True
             if not self.is_active:
                 self._status = "cancelled"
         self._cancel.set()
@@ -191,11 +195,14 @@ class Run:
 
     def snapshot(self) -> RunSnapshot:
         with self._lock:
+            status = self._status
+            if status == "running" and self._stop_requested:
+                status = "stopping"
             error_kind, error_message = self._error or (None, None)
             return RunSnapshot(
                 key=self.key,
                 title=self.title,
-                status=self._status,
+                status=status,
                 processed=self._processed,
                 total=self._total,
                 current_folder=self._current_folder,
@@ -216,7 +223,15 @@ def _account_config(account) -> dict:
     }
 
 
-_STATUS_ORDER = {"running": 0, "queued": 1, "paused": 2, "error": 3, "done": 4, "cancelled": 5}
+_STATUS_ORDER = {
+    "running": 0,
+    "stopping": 1,
+    "queued": 2,
+    "paused": 3,
+    "error": 4,
+    "done": 5,
+    "cancelled": 6,
+}
 
 
 class RunManager:

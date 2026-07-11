@@ -219,6 +219,7 @@ def build_progress(
 
 _STATUS_COLOR = {
     "running": ft.Colors.BLUE,
+    "stopping": ft.Colors.AMBER,
     "queued": ft.Colors.GREY,
     "paused": ft.Colors.AMBER,
     "done": ft.Colors.GREEN,

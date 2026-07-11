@@ -297,3 +297,38 @@ def test_manager_concurrent_add_remove_during_iteration(monkeypatch, tmp_path):
     for t in threads:
         t.join(timeout=5)
     assert errors == []  # no dictionary-changed-size crash
+
+
+def test_stopping_status_while_draining(monkeypatch, tmp_path):
+    src_data = {"INBOX": [make_message(uid=i, message_id=f"<m{i}@x>") for i in range(1, 20)]}
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    gate = threading.Event()
+    real_append = dst.append
+    dst.append = lambda f, b, flags=(), msg_time=None: (gate.wait(timeout=5), real_append(f, b, flags=flags, msg_time=msg_time))[1]
+    run = build_run(monkeypatch, tmp_path, src_data, dst)
+    run.start()
+    # let it park mid-run, then request cancel
+    import time as _t
+    _t.sleep(0.05)
+    run.cancel()
+    assert run.snapshot().status == "stopping"  # immediate feedback while draining
+    gate.set()
+    run.join(timeout=10)
+    assert run.snapshot().status == "cancelled"
+
+
+def test_cancel_then_pause_stays_cancelled(monkeypatch, tmp_path):
+    src_data = {"INBOX": [make_message(uid=i, message_id=f"<m{i}@x>") for i in range(1, 20)]}
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    gate = threading.Event()
+    real_append = dst.append
+    dst.append = lambda f, b, flags=(), msg_time=None: (gate.wait(timeout=5), real_append(f, b, flags=flags, msg_time=msg_time))[1]
+    run = build_run(monkeypatch, tmp_path, src_data, dst)
+    run.start()
+    import time as _t
+    _t.sleep(0.05)
+    run.cancel()
+    run.pause()  # pause() must no-op: status is no longer "running" (it's running+stop_requested, but pause guards on _status=="running")
+    gate.set()
+    run.join(timeout=10)
+    assert run.snapshot().status == "cancelled"  # not flipped to paused
