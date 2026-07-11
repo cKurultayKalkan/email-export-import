@@ -228,16 +228,55 @@ _STATUS_COLOR = {
 }
 
 
-def _progress_line(i18n: I18n, snap: RunSnapshot) -> ft.Control:
+def _progress_controls(i18n: I18n, snap: RunSnapshot):
+    """Build the progress control and return (container, bar_or_None, counter).
+
+    The bar/counter references let the dashboard poll update values in place
+    instead of rebuilding the view — rebuilding recreates every button, which
+    breaks hover/click on the cards. Callers that don't poll ignore the refs.
+    """
     if snap.total > 0:
-        return ft.Column(
-            [
-                ft.ProgressBar(value=snap.processed / snap.total),
-                ft.Text(f"{snap.processed} / {snap.total}", size=12),
-            ],
-            spacing=4,
-        )
-    return ft.Text(i18n.t("dash.migrated_only", count=snap.processed), size=12)
+        bar = ft.ProgressBar(value=snap.processed / snap.total)
+        counter = ft.Text(f"{snap.processed} / {snap.total}", size=12)
+        return ft.Column([bar, counter], spacing=4), bar, counter
+    counter = ft.Text(i18n.t("dash.migrated_only", count=snap.processed), size=12)
+    return counter, None, counter
+
+
+def dashboard_signature(snapshots: list[RunSnapshot]) -> tuple:
+    """Structural fingerprint: which cards exist and each card's status. When
+    this is unchanged between polls, only progress values changed, so the poll
+    updates them in place and never rebuilds the (button-bearing) cards."""
+    return tuple((s.key, s.status) for s in snapshots)
+
+
+def detail_signature(snap: RunSnapshot) -> tuple:
+    return (snap.key, snap.status)
+
+
+def apply_dashboard_values(refs: dict, snapshots: list[RunSnapshot], i18n: I18n) -> None:
+    """Mutate the held bar/counter controls' values in place (no .update())."""
+    for s in snapshots:
+        entry = refs.get(s.key)
+        if entry is None:
+            continue
+        if entry["bar"] is not None and s.total > 0:
+            entry["bar"].value = s.processed / s.total
+            entry["counter"].value = f"{s.processed} / {s.total}"
+        else:
+            entry["counter"].value = i18n.t("dash.migrated_only", count=s.processed)
+
+
+def apply_detail_values(refs: dict, snap: RunSnapshot, i18n: I18n) -> None:
+    entry = refs.get("_")
+    if entry is None:
+        return
+    if entry["bar"] is not None and snap.total > 0:
+        entry["bar"].value = snap.processed / snap.total
+        entry["counter"].value = f"{snap.processed} / {snap.total}"
+    else:
+        entry["counter"].value = i18n.t("dash.migrated_only", count=snap.processed)
+    entry["folder"].value = snap.current_folder or ""
 
 
 def _card_actions(
@@ -268,6 +307,7 @@ def build_dashboard(
     on_dismiss: Callable[[str], None],
     on_locale: Callable[[str], None],
     highlight_key: str | None = None,
+    refs: dict | None = None,
 ) -> ft.View:
     cards: list[ft.Control] = []
     for snap in snapshots:
@@ -277,9 +317,12 @@ def build_dashboard(
             weight=ft.FontWeight.BOLD,
             size=12,
         )
+        progress, bar, counter = _progress_controls(i18n, snap)
+        if refs is not None:
+            refs[snap.key] = {"bar": bar, "counter": counter}
         body = [
             ft.Row([ft.Text(snap.title, weight=ft.FontWeight.BOLD, expand=True), badge]),
-            _progress_line(i18n, snap),
+            progress,
         ]
         if snap.error_kind == "quota":
             body.append(ft.Text(i18n.t("done.quota"), color=ft.Colors.RED, size=12))
@@ -318,12 +361,17 @@ def build_detail(
     on_resume: Callable[[str], None],
     on_cancel: Callable[[str], None],
     on_back: Callable[[], None],
+    refs: dict | None = None,
 ) -> ft.View:
+    progress, bar, counter = _progress_controls(i18n, snap)
+    folder = ft.Text(snap.current_folder or "", size=12)
+    if refs is not None:
+        refs["_"] = {"bar": bar, "counter": counter, "folder": folder}
     controls: list[ft.Control] = [
         ft.Text(snap.title, size=18, weight=ft.FontWeight.BOLD),
         ft.Text(i18n.t(f"status.{snap.status}"), color=_STATUS_COLOR.get(snap.status)),
-        _progress_line(i18n, snap),
-        ft.Text(snap.current_folder or "", size=12),
+        progress,
+        folder,
     ]
     if snap.error_kind == "quota":
         controls.append(ft.Text(i18n.t("done.quota"), color=ft.Colors.RED))

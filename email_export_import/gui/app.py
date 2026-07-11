@@ -58,15 +58,25 @@ def _page_main(page: ft.Page) -> None:
         page.views.append(_dashboard_view())
         page.update()
 
+    # Live-render bookkeeping so the poll can update values in place instead of
+    # rebuilding the view every tick (a rebuild recreates every button and
+    # kills hover/click on the cards).
+    render = {"dash_refs": {}, "dash_sig": None, "detail_refs": {}, "detail_sig": None}
+
     def _dashboard_view() -> ft.View:
         hk = highlight[0]
         highlight[0] = None
-        return views.build_dashboard(
-            i18n, manager.snapshot_all(),
+        snaps = manager.snapshot_all()
+        refs: dict = {}
+        view = views.build_dashboard(
+            i18n, snaps,
             on_new=start_wizard, on_pause=do_pause, on_resume=ask_resume,
             on_cancel=do_cancel, on_detail=show_detail, on_dismiss=do_dismiss,
-            on_locale=set_locale, highlight_key=hk,
+            on_locale=set_locale, highlight_key=hk, refs=refs,
         )
+        render["dash_refs"] = refs
+        render["dash_sig"] = views.dashboard_signature(snaps)
+        return view
 
     def do_pause(key: str) -> None:
         run = manager.get(key)
@@ -156,6 +166,16 @@ def _page_main(page: ft.Page) -> None:
 
     detail_key: list[str | None] = [None]
 
+    def _detail_view(snap) -> ft.View:
+        refs: dict = {}
+        view = views.build_detail(
+            i18n, snap, on_pause=do_pause, on_resume=ask_resume,
+            on_cancel=do_cancel, on_back=back_to_dashboard, refs=refs,
+        )
+        render["detail_refs"] = refs
+        render["detail_sig"] = views.detail_signature(snap)
+        return view
+
     def show_detail(key: str) -> None:
         detail_key[0] = key
         run = manager.get(key)
@@ -163,12 +183,7 @@ def _page_main(page: ft.Page) -> None:
             show_dashboard()
             return
         page.views.clear()
-        page.views.append(
-            views.build_detail(
-                i18n, run.snapshot(), on_pause=do_pause, on_resume=ask_resume,
-                on_cancel=do_cancel, on_back=back_to_dashboard,
-            )
-        )
+        page.views.append(_detail_view(run.snapshot()))
         page.update()
 
     def back_to_dashboard() -> None:
@@ -191,20 +206,34 @@ def _page_main(page: ft.Page) -> None:
                     continue
                 route = page.views[-1].route
                 if route == "/":
-                    new_view = _dashboard_view()
-                    if page.views and page.views[-1].route == "/":
-                        page.views[-1] = new_view
+                    snaps = manager.snapshot_all()
+                    if views.dashboard_signature(snaps) == render["dash_sig"]:
+                        # Same cards, same statuses — only progress moved.
+                        # Update values in place; leave buttons untouched.
+                        views.apply_dashboard_values(render["dash_refs"], snaps, i18n)
+                        for entry in render["dash_refs"].values():
+                            safe_update(entry["counter"])
+                            if entry["bar"] is not None:
+                                safe_update(entry["bar"])
+                    elif page.views and page.views[-1].route == "/":
+                        # Card set or a status changed — buttons differ, so a
+                        # full rebuild is correct (and rare).
+                        page.views[-1] = _dashboard_view()
                         page.update()
                 elif route == "/detail" and detail_key[0] is not None:
                     run = manager.get(detail_key[0])
                     if run is not None:
-                        new_view = views.build_detail(
-                            i18n, run.snapshot(), on_pause=do_pause,
-                            on_resume=ask_resume, on_cancel=do_cancel,
-                            on_back=back_to_dashboard,
-                        )
-                        if page.views and page.views[-1].route == "/detail":
-                            page.views[-1] = new_view
+                        snap = run.snapshot()
+                        if views.detail_signature(snap) == render["detail_sig"]:
+                            views.apply_detail_values(render["detail_refs"], snap, i18n)
+                            entry = render["detail_refs"].get("_")
+                            if entry is not None:
+                                safe_update(entry["counter"])
+                                safe_update(entry["folder"])
+                                if entry["bar"] is not None:
+                                    safe_update(entry["bar"])
+                        elif page.views and page.views[-1].route == "/detail":
+                            page.views[-1] = _detail_view(snap)
                             page.update()
             except RuntimeError:
                 return  # page closed / controls unmounted

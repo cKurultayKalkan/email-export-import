@@ -126,3 +126,64 @@ def test_reconnect_closes_source_when_destination_fails(monkeypatch, tmp_path):
     assert not dst_res.ok
     src_res.conn.close()  # what the fix guarantees
     assert src_fake.logged_in is False  # logout() ran
+
+
+def test_dashboard_signature_stable_across_progress_change():
+    from email_export_import.gui import views
+    from email_export_import.gui.run_manager import RunSnapshot
+
+    a = RunSnapshot(key="k", title="t", status="running", processed=1, total=10,
+                    current_folder="INBOX")
+    b = RunSnapshot(key="k", title="t", status="running", processed=5, total=10,
+                    current_folder="INBOX")
+    # progress moved but status/cards identical -> same signature -> in-place path
+    assert views.dashboard_signature([a]) == views.dashboard_signature([b])
+    # a status change flips the signature -> full rebuild path
+    c = RunSnapshot(key="k", title="t", status="paused", processed=5, total=10,
+                    current_folder="INBOX")
+    assert views.dashboard_signature([a]) != views.dashboard_signature([c])
+
+
+def test_build_dashboard_populates_refs_and_apply_updates_in_place():
+    from email_export_import.gui import views
+    from email_export_import.gui.i18n import I18n
+    from email_export_import.gui.run_manager import RunSnapshot
+
+    i18n = I18n(locale="en")
+    noop = lambda *a, **k: None
+    snap = RunSnapshot(key="k", title="t", status="running", processed=2, total=10,
+                       current_folder="INBOX")
+    refs: dict = {}
+    views.build_dashboard(i18n, [snap], noop, noop, noop, noop, noop, noop, noop,
+                          refs=refs)
+    assert "k" in refs
+    bar = refs["k"]["bar"]
+    counter = refs["k"]["counter"]
+    assert abs(bar.value - 0.2) < 1e-9
+    # advancing progress updates the SAME control objects (no rebuild)
+    newer = RunSnapshot(key="k", title="t", status="running", processed=7, total=10,
+                        current_folder="INBOX")
+    views.apply_dashboard_values(refs, [newer], i18n)
+    assert refs["k"]["bar"] is bar  # same object, not replaced
+    assert abs(bar.value - 0.7) < 1e-9
+    assert counter.value == "7 / 10"
+
+
+def test_build_detail_refs_apply_updates_folder_and_bar():
+    from email_export_import.gui import views
+    from email_export_import.gui.i18n import I18n
+    from email_export_import.gui.run_manager import RunSnapshot
+
+    i18n = I18n(locale="en")
+    noop = lambda *a, **k: None
+    snap = RunSnapshot(key="k", title="t", status="running", processed=1, total=4,
+                       current_folder="INBOX")
+    refs: dict = {}
+    views.build_detail(i18n, snap, noop, noop, noop, noop, refs=refs)
+    bar = refs["_"]["bar"]
+    newer = RunSnapshot(key="k", title="t", status="running", processed=3, total=4,
+                        current_folder="Sent")
+    views.apply_detail_values(refs, newer, i18n)
+    assert refs["_"]["bar"] is bar
+    assert abs(bar.value - 0.75) < 1e-9
+    assert refs["_"]["folder"].value == "Sent"
