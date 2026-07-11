@@ -88,7 +88,7 @@ class Run:
             spool_enabled=cfg.get("spool", False),
             state_dir=state_dir,
         )
-        run._status = "paused"
+        run._status = "done" if state.status == "completed" else "paused"
         run._processed = state.migrated_count()
         return run
 
@@ -242,12 +242,19 @@ class RunManager:
         self._runs: dict[str, Run] = {}
         self._lock = threading.Lock()
 
-    def load_resumable(self) -> None:
-        for state in MigrationState.list_resumable(base_dir=self.state_dir):
+    def _load_placeholders(self, states) -> None:
+        for state in states:
             key = state.path.stem
             with self._lock:
                 if key not in self._runs:
                     self._runs[key] = Run.placeholder(state, state_dir=self.state_dir)
+
+    def load_resumable(self) -> None:
+        self._load_placeholders(MigrationState.list_resumable(base_dir=self.state_dir))
+
+    def load_completed(self) -> None:
+        """Surface finished migrations as done cards so they stay visible."""
+        self._load_placeholders(MigrationState.list_completed(base_dir=self.state_dir))
 
     def add(self, run: Run) -> bool:
         with self._lock:

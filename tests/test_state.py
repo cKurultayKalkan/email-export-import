@@ -163,3 +163,27 @@ def test_list_resumable_excludes_cancelled(tmp_path):
     resumable = MigrationState.list_resumable(base_dir=base)
     assert len(resumable) == 1
     assert resumable[0].config == {"src": {"host": "h2"}}
+
+
+def test_list_completed_returns_only_completed_with_config(tmp_path):
+    base = tmp_path / "base"
+    done = MigrationState.for_pair("a@x", "b@y", base_dir=base)
+    done.set_config({"src": {"email": "a@x"}, "dst": {"email": "b@y"}})
+    done.mark_completed()
+    done.flush()
+
+    running = MigrationState.for_pair("c@x", "d@y", base_dir=base)
+    running.set_config({"src": {"email": "c@x"}})
+    running.flush()
+
+    cancelled = MigrationState.for_pair("e@x", "f@y", base_dir=base)
+    cancelled.set_config({"src": {"email": "e@x"}})
+    cancelled.mark_cancelled()
+    cancelled.flush()
+
+    no_config = MigrationState.for_pair("g@x", "h@y", base_dir=base)
+    no_config.mark_completed()
+    no_config.flush()
+
+    completed = MigrationState.list_completed(base_dir=base)
+    assert [s.config["src"]["email"] for s in completed] == ["a@x"]

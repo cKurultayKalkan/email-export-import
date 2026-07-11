@@ -332,3 +332,28 @@ def test_cancel_then_pause_stays_cancelled(monkeypatch, tmp_path):
     gate.set()
     run.join(timeout=10)
     assert run.snapshot().status == "cancelled"  # not flipped to paused
+
+
+def test_load_completed_shows_done_cards(tmp_path):
+    from email_export_import.gui.run_manager import RunManager
+
+    done = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+    done.set_config({"src": {"email": "a@x", "host": "h"},
+                     "dst": {"email": "b@y", "host": "h2"}, "total": 100})
+    done.mark_migrated("INBOX", "<m1@x>", 1)
+    done.mark_completed()
+    done.flush()
+
+    running = MigrationState.for_pair("c@x", "d@y", base_dir=tmp_path)
+    running.set_config({"src": {"email": "c@x", "host": "h"},
+                        "dst": {"email": "d@y", "host": "h2"}})
+    running.flush()
+
+    m = RunManager(state_dir=tmp_path)
+    m.load_resumable()
+    m.load_completed()
+    by_key = {s.key: s for s in m.snapshot_all()}
+    assert by_key["a@x__b@y"].status == "done"
+    assert by_key["a@x__b@y"].processed == 1
+    assert by_key["a@x__b@y"].total == 100
+    assert by_key["c@x__d@y"].status == "paused"

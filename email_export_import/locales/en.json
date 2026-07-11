@@ -63,7 +63,11 @@
   "done.quota": "The destination mailbox is full. Free up space and run again to continue.",
   "error.auth": "The server rejected this email/password. Check the address and the app password.",
   "error.connection": "Could not connect to the server. Check the server name and your network.",
-  "language.label": "Language",
   "plan.spool": "Keep downloaded messages on disk until uploaded (failed uploads retry from disk without re-downloading)",
-  "done.spool_pending": "{count} messages kept on disk for retry"
+  "done.spool_pending": "{count} messages kept on disk for retry",
+  "nav.settings": "Settings",
+  "settings.title": "Settings",
+  "settings.language": "Language",
+  "settings.data_location": "Where your data is stored",
+  "settings.data_note": "Migration progress is saved here. Nothing is deleted — completed migrations stay listed as done."
 }

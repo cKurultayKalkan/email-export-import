@@ -11,19 +11,48 @@ from .i18n import I18n
 from .run_manager import RunSnapshot
 
 
-def _title_bar(i18n: I18n, on_locale: Callable[[str], None]) -> ft.Row:
+def _title_bar(i18n: I18n, on_settings: Callable[[], None]) -> ft.Row:
     return ft.Row(
         [
             ft.Text(i18n.t("app.title"), size=22, weight=ft.FontWeight.BOLD, expand=True),
-            ft.Dropdown(
-                width=110,
-                value=i18n.locale,
-                options=[ft.dropdown.Option("tr", "Türkçe"), ft.dropdown.Option("en", "English")],
-                on_select=lambda e: on_locale(e.control.value),
-                label=i18n.t("language.label"),
+            ft.TextButton(
+                i18n.t("nav.settings"),
+                icon=ft.Icons.SETTINGS,
+                on_click=lambda e: on_settings(),
             ),
         ]
     )
+
+
+def build_settings(
+    i18n: I18n,
+    data_dir: str,
+    on_locale: Callable[[str], None],
+    on_back: Callable[[], None],
+) -> ft.View:
+    language = ft.Dropdown(
+        label=i18n.t("settings.language"),
+        value=i18n.locale,
+        width=280,
+        options=[
+            ft.dropdown.Option("tr", "Türkçe"),
+            ft.dropdown.Option("en", "English"),
+        ],
+        on_select=lambda e: on_locale(e.control.value),
+    )
+    controls: list[ft.Control] = [
+        ft.Text(i18n.t("settings.title"), size=20, weight=ft.FontWeight.BOLD),
+        language,
+        ft.Divider(),
+        ft.Text(i18n.t("settings.data_location"), weight=ft.FontWeight.BOLD, size=13),
+        ft.Text(data_dir, size=12, selectable=True),
+        ft.Text(i18n.t("settings.data_note"), size=12),
+        ft.Row(
+            [ft.TextButton(i18n.t("detail.back"), on_click=lambda e: on_back())],
+            alignment=ft.MainAxisAlignment.END,
+        ),
+    ]
+    return ft.View(route="/settings", controls=controls, padding=24, spacing=14)
 
 
 def build_account(
@@ -305,7 +334,7 @@ def build_dashboard(
     on_cancel: Callable[[str], None],
     on_detail: Callable[[str], None],
     on_dismiss: Callable[[str], None],
-    on_locale: Callable[[str], None],
+    on_settings: Callable[[], None],
     highlight_key: str | None = None,
     refs: dict | None = None,
 ) -> ft.View:
@@ -344,7 +373,7 @@ def build_dashboard(
         cards.append(ft.Text(i18n.t("dash.empty")))
 
     controls: list[ft.Control] = [
-        _title_bar(i18n, on_locale),
+        _title_bar(i18n, on_settings),
         ft.Text(i18n.t("dash.heading"), size=18, weight=ft.FontWeight.BOLD),
     ]
     controls.extend(cards)

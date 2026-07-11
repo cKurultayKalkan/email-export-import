@@ -187,3 +187,30 @@ def test_build_detail_refs_apply_updates_folder_and_bar():
     assert refs["_"]["bar"] is bar
     assert abs(bar.value - 0.75) < 1e-9
     assert refs["_"]["folder"].value == "Sent"
+
+
+def test_build_settings_view():
+    from email_export_import.gui import views
+    from email_export_import.gui.i18n import I18n
+
+    i18n = I18n(locale="en")
+    noop = lambda *a, **k: None
+    view = views.build_settings(i18n, "/home/x/.email-export-import", noop, noop)
+    assert view.route == "/settings"
+    assert isinstance(view.controls, list)
+
+
+def test_completed_session_shows_as_done_placeholder(tmp_path):
+    from email_export_import.state import MigrationState
+    from email_export_import.gui.run_manager import Run
+
+    s = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+    s.set_config({"src": {"email": "a@x", "host": "h"},
+                  "dst": {"email": "b@y", "host": "h2"}, "total": 50})
+    s.mark_migrated("INBOX", "<m@x>", 1)
+    s.mark_completed()
+    s.flush()
+    snap = Run.placeholder(MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path),
+                           state_dir=tmp_path).snapshot()
+    assert snap.status == "done"
+    assert snap.processed == 1 and snap.total == 50

@@ -33,12 +33,9 @@ class I18n:
         }
         if locale is not None and locale not in self._tables:
             locale = None
-        self.locale = (
-            locale
-            or self._saved_locale()
-            or (_system_locale() if _system_locale() in self._tables else None)
-            or FALLBACK
-        )
+        # Default to English; the OS locale is deliberately not consulted so
+        # the app is predictable. A saved preference or explicit choice wins.
+        self.locale = locale or self._saved_locale() or FALLBACK
 
     def _saved_locale(self) -> str | None:
         try:

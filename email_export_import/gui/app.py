@@ -35,6 +35,7 @@ def _page_main(page: ft.Page) -> None:
     controller = Controller()
     manager = RunManager()
     manager.load_resumable()
+    manager.load_completed()  # keep finished migrations visible as done cards
     ws = WizardState()
     highlight: list[str | None] = [None]
     page.title = i18n.t("app.title")
@@ -62,7 +63,19 @@ def _page_main(page: ft.Page) -> None:
 
     def set_locale(locale: str) -> None:
         i18n.set_locale(locale)
-        show_dashboard()
+        show_settings()  # stay on settings, re-rendered in the new language
+
+    def show_settings() -> None:
+        from ..state import DEFAULT_BASE_DIR
+
+        page.views.clear()
+        page.views.append(
+            views.build_settings(
+                i18n, str(DEFAULT_BASE_DIR), on_locale=set_locale,
+                on_back=show_dashboard,
+            )
+        )
+        page.update()
 
     def show_dashboard() -> None:
         page.views.clear()
@@ -83,7 +96,7 @@ def _page_main(page: ft.Page) -> None:
             i18n, snaps,
             on_new=start_wizard, on_pause=do_pause, on_resume=ask_resume,
             on_cancel=do_cancel, on_detail=show_detail, on_dismiss=do_dismiss,
-            on_locale=set_locale, highlight_key=hk, refs=refs,
+            on_settings=show_settings, highlight_key=hk, refs=refs,
         )
         render["dash_refs"] = refs
         render["dash_sig"] = views.dashboard_signature(snaps)

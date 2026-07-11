@@ -63,6 +63,24 @@ class MigrationState:
                 out.append(s)
         return out
 
+    @classmethod
+    def list_completed(cls, base_dir: Path | None = None) -> list["MigrationState"]:
+        """Finished sessions (status completed, with a saved config) so the
+        dashboard can keep them visible as done cards instead of appearing to
+        have vanished."""
+        state_dir = (base_dir or DEFAULT_BASE_DIR) / "state"
+        if not state_dir.is_dir():
+            return []
+        out: list[MigrationState] = []
+        for path in sorted(state_dir.glob("*.json")):
+            try:
+                s = cls(path)
+            except Exception:
+                continue
+            if s.status == "completed" and s.config is not None:
+                out.append(s)
+        return out
+
     def set_config(self, config: dict) -> None:
         self.config = config
 

@@ -231,3 +231,30 @@ def _dialog_title(dlg):
     if title is None:
         return ""
     return getattr(title, "value", "") or ""
+
+
+def test_settings_button_opens_settings_and_completed_card_shown(monkeypatch, tmp_path):
+    # a completed session must appear as a done card on the dashboard
+    done = MigrationState.for_pair("done@x.com", "done@y.com", base_dir=tmp_path)
+    done.set_config({"src": {"host": "s", "port": 993, "ssl": True, "verify_ssl": True,
+                             "email": "done@x.com"},
+                     "dst": {"host": "d", "port": 993, "ssl": True, "verify_ssl": True,
+                             "email": "done@y.com"},
+                     "skip": [], "workers": 2, "total": 5})
+    done.mark_migrated("INBOX", "<m@x>", 1)
+    done.mark_completed()
+    done.flush()
+
+    page = _run_page()
+    dash = page.views[-1]
+    labels = [lbl for lbl, _ in _clickables(dash)]
+
+    # done card is visible (Detail button present) and Settings nav exists
+    assert EN("nav.settings") in labels
+    assert EN("dash.detail") in labels  # the completed card rendered
+
+    assert _click(dash, EN("nav.settings")), "Settings button did nothing"
+    assert page.views[-1].route == "/settings"
+    # language + back present on settings
+    settings_labels = [lbl for lbl, _ in _clickables(page.views[-1])]
+    assert EN("detail.back") in settings_labels
