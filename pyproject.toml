@@ -25,3 +25,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["email_export_import"]
+
+# Desktop packaging (`flet build`). The app entry is the root main.py.
+[tool.flet]
+product = "Email Export-Import"
+org = "com.ckurultaykalkan"
+
+[tool.flet.app]
+module = "main"
