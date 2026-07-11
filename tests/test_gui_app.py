@@ -195,9 +195,21 @@ def test_build_settings_view():
 
     i18n = I18n(locale="en")
     noop = lambda *a, **k: None
-    view = views.build_settings(i18n, "/home/x/.email-export-import", noop, noop)
+    view = views.build_settings(i18n, "/home/x/.email-export-import", noop, noop,
+                                version="1.2.3", on_check_update=noop)
     assert view.route == "/settings"
-    assert isinstance(view.controls, list)
+    labels = []
+
+    def walk(c):
+        v = getattr(c, "content", None) or getattr(c, "text", None) or getattr(c, "value", None)
+        if isinstance(v, str):
+            labels.append(v)
+        for ch in getattr(c, "controls", []) or []:
+            walk(ch)
+    for c in view.controls:
+        walk(c)
+    assert any("1.2.3" in x for x in labels)
+    assert i18n.t("settings.check_updates") in labels
 
 
 def test_completed_session_shows_as_done_placeholder(tmp_path):

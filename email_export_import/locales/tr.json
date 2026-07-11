@@ -75,5 +75,15 @@
   "common.no": "hayır",
   "account.verify_ssl": "Sertifikayı doğrula",
   "detail.edit": "Bağlantıyı düzenle",
-  "detail.save": "Kaydet"
+  "detail.save": "Kaydet",
+  "settings.version": "Sürüm",
+  "settings.check_updates": "Güncellemeleri denetle",
+  "update.available": "{version} sürümü mevcut.",
+  "update.now": "Güncelle",
+  "update.later": "Sonra",
+  "update.checking": "Güncellemeler denetleniyor…",
+  "update.up_to_date": "En son sürümü kullanıyorsunuz.",
+  "update.downloading": "Güncelleme indiriliyor…",
+  "update.failed": "Güncelleme başarısız — lütfen sürümler sayfasından elle indirin.",
+  "update.ready": "Kurulum açıldı. Güncellemeyi tamamlamak için uygulamayı kapatın."
 }

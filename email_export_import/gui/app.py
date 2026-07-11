@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import flet as ft
 
+from .. import __version__
 from ..models import Account
 from ..state import MigrationState
+from . import updater
 from . import views
 from .async_ops import run_async
 from .controller import Controller
@@ -77,7 +80,8 @@ def _page_main(page: ft.Page) -> None:
         page.views.append(
             views.build_settings(
                 i18n, str(DEFAULT_BASE_DIR), on_locale=set_locale,
-                on_back=show_dashboard,
+                on_back=show_dashboard, version=__version__,
+                on_check_update=lambda: _check_updates(manual=True),
             )
         )
         page.update()
@@ -196,6 +200,56 @@ def _page_main(page: ft.Page) -> None:
     def _show_error(message: str) -> None:
         page.show_dialog(
             ft.AlertDialog(title=ft.Text(i18n.t("status.error")), content=ft.Text(message))
+        )
+
+    # ---- auto-update ------------------------------------------------------
+
+    def _check_updates(manual: bool) -> None:
+        if manual:
+            _info_dialog(i18n.t("update.checking"))
+        run_async(
+            lambda: updater.check_for_update(__version__),
+            on_done=ui(lambda info: _on_update_checked(info, manual)),
+            on_error=ui(lambda exc: _on_update_checked(None, manual)),
+        )
+
+    def _on_update_checked(info, manual: bool) -> None:
+        if info is None:
+            if manual:
+                _info_dialog(i18n.t("update.up_to_date"))
+            return
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text(i18n.t("app.title")),
+                content=ft.Text(i18n.t("update.available", version=info.version)),
+                actions=[
+                    ft.TextButton(i18n.t("update.later"), on_click=lambda e: page.pop_dialog()),
+                    ft.FilledButton(i18n.t("update.now"), on_click=lambda e: _do_update(info)),
+                ],
+            )
+        )
+
+    def _do_update(info) -> None:
+        page.pop_dialog()
+        _info_dialog(i18n.t("update.downloading"))
+        run_async(
+            lambda: updater.download_asset(info, Path.home() / "Downloads"),
+            on_done=ui(lambda path: _update_downloaded(path)),
+            on_error=ui(lambda exc: _info_dialog(i18n.t("update.failed"))),
+        )
+
+    def _update_downloaded(path) -> None:
+        updater.open_installer(path)
+        _info_dialog(i18n.t("update.ready"))
+
+    def _info_dialog(message: str) -> None:
+        page.show_dialog(
+            ft.AlertDialog(
+                title=ft.Text(i18n.t("app.title")),
+                content=ft.Text(message),
+                actions=[ft.TextButton(i18n.t("update.later"), on_click=lambda e: page.pop_dialog())],
+            )
         )
 
     # ---- detail ---------------------------------------------------------
@@ -436,6 +490,7 @@ def _page_main(page: ft.Page) -> None:
 
     show_dashboard()
     page.run_thread(poll)
+    _check_updates(manual=False)
 
 
 if __name__ == "__main__":

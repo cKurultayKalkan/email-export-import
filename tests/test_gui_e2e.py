@@ -331,3 +331,39 @@ def test_settings_button_opens_settings_and_completed_card_shown(monkeypatch, tm
     # language + back present on settings
     settings_labels = [lbl for lbl, _ in _clickables(page.views[-1])]
     assert EN("detail.back") in settings_labels
+
+
+def test_update_banner_shown_when_newer_available(monkeypatch, tmp_path):
+    from email_export_import.gui import app as app_module
+    from email_export_import.gui import updater as updater_mod
+    from email_export_import.gui.updater import UpdateInfo
+
+    fake = UpdateInfo(version="v9.9.9", asset_url="https://x/a",
+                      asset_name="email-export-import-macos.zip", sha256="abc")
+    monkeypatch.setattr(updater_mod, "check_for_update", lambda *a, **k: fake)
+    monkeypatch.setattr(app_module.updater, "check_for_update", lambda *a, **k: fake)
+
+    page = _run_page()
+    # startup check runs async and shows the update dialog
+    assert _wait(lambda: page.dialog is not None
+                 and "9.9.9" in _dialog_content(page.dialog)), \
+        "update dialog not shown for a newer release"
+    # the dialog offers Update
+    labels = [lbl for lbl, _ in _clickables(page.dialog)]
+    assert EN("update.now") in labels
+
+
+def test_no_update_dialog_when_up_to_date(monkeypatch, tmp_path):
+    from email_export_import.gui import app as app_module
+
+    monkeypatch.setattr(app_module.updater, "check_for_update", lambda *a, **k: None)
+    page = _run_page()
+    # give the async startup check a moment; no dialog should appear
+    import time as _t
+    _t.sleep(0.3)
+    assert page.dialog is None
+
+
+def _dialog_content(dlg):
+    content = getattr(dlg, "content", None)
+    return getattr(content, "value", "") or ""

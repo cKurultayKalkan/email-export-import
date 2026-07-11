@@ -29,6 +29,8 @@ def build_settings(
     data_dir: str,
     on_locale: Callable[[str], None],
     on_back: Callable[[], None],
+    version: str = "",
+    on_check_update: Callable[[], None] | None = None,
 ) -> ft.View:
     language = ft.Dropdown(
         label=i18n.t("settings.language"),
@@ -43,6 +45,13 @@ def build_settings(
     controls: list[ft.Control] = [
         ft.Text(i18n.t("settings.title"), size=20, weight=ft.FontWeight.BOLD),
         language,
+        ft.Divider(),
+        ft.Text(f"{i18n.t('settings.version')}: {version}", size=13),
+        ft.TextButton(
+            i18n.t("settings.check_updates"),
+            icon=ft.Icons.SYSTEM_UPDATE,
+            on_click=lambda e: on_check_update() if on_check_update else None,
+        ),
         ft.Divider(),
         ft.Text(i18n.t("settings.data_location"), weight=ft.FontWeight.BOLD, size=13),
         ft.Text(data_dir, size=12, selectable=True),

@@ -75,5 +75,15 @@
   "common.no": "no",
   "account.verify_ssl": "Verify certificate",
   "detail.edit": "Edit connection",
-  "detail.save": "Save"
+  "detail.save": "Save",
+  "settings.version": "Version",
+  "settings.check_updates": "Check for updates",
+  "update.available": "Version {version} is available.",
+  "update.now": "Update",
+  "update.later": "Later",
+  "update.checking": "Checking for updates…",
+  "update.up_to_date": "You are on the latest version.",
+  "update.downloading": "Downloading update…",
+  "update.failed": "Update failed — please download it manually from the releases page.",
+  "update.ready": "The installer has been opened. Close this app to finish updating."
 }
