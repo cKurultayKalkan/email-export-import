@@ -68,3 +68,28 @@ def test_check_none_when_sha_missing(monkeypatch):
                                   _asset("SHA256SUMS.txt")])
     sums = "abc  some-other-file.zip\n"  # no line for the windows asset
     assert check_for_update("0.1.0", fetch=lambda url: release, fetch_text=lambda url: sums) is None
+
+
+import hashlib
+import io
+
+from email_export_import.gui.updater import ChecksumMismatch, download_asset
+
+
+def test_download_verifies_and_writes(tmp_path):
+    payload = b"installer-bytes" * 1000
+    sha = hashlib.sha256(payload).hexdigest()
+    info = UpdateInfo(version="v0.2.0", asset_url="https://x/a",
+                      asset_name="email-export-import-linux.zip", sha256=sha)
+    dest = download_asset(info, tmp_path, opener=lambda url: io.BytesIO(payload))
+    assert dest.read_bytes() == payload
+    assert dest.name == "email-export-import-linux.zip"
+
+
+def test_download_rejects_bad_checksum(tmp_path):
+    payload = b"tampered"
+    info = UpdateInfo(version="v0.2.0", asset_url="https://x/a",
+                      asset_name="email-export-import-linux.zip", sha256="0" * 64)
+    with pytest.raises(ChecksumMismatch):
+        download_asset(info, tmp_path, opener=lambda url: io.BytesIO(payload))
+    assert not (tmp_path / "email-export-import-linux.zip").exists()
