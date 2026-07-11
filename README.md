@@ -40,7 +40,8 @@ uv run email-export-import-gui
 ```
 
 Same engine, same resume files as the CLI — start a migration in one and
-finish it in the other. Turkish and English UI.
+finish it in the other. Multiple migrations run side by side on a live
+dashboard with pause/resume. Turkish and English UI.
 
 ## Notes
 
