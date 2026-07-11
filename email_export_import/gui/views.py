@@ -351,13 +351,25 @@ def build_detail(
     if snap.spool_pending:
         controls.append(ft.Text(i18n.t("done.spool_pending", count=snap.spool_pending), size=12))
     controls.append(ft.Text(i18n.t("done.resume_hint"), size=12))
-    controls.append(
-        ft.Row(
-            _card_actions(i18n, snap, on_pause, on_resume, on_cancel, lambda k: None, lambda k: None)[:-1]
-            + [ft.TextButton(i18n.t("detail.back"), on_click=lambda e: on_back())],
-            alignment=ft.MainAxisAlignment.END,
+    detail_actions: list[ft.Control] = []
+    if snap.status == "running":
+        detail_actions.append(
+            ft.TextButton(i18n.t("dash.pause"), on_click=lambda e: on_pause(snap.key))
         )
+        detail_actions.append(
+            ft.TextButton(i18n.t("dash.cancel"), on_click=lambda e: on_cancel(snap.key))
+        )
+    elif snap.status == "paused":
+        detail_actions.append(
+            ft.FilledButton(i18n.t("dash.resume"), on_click=lambda e: on_resume(snap.key))
+        )
+        detail_actions.append(
+            ft.TextButton(i18n.t("dash.cancel"), on_click=lambda e: on_cancel(snap.key))
+        )
+    detail_actions.append(
+        ft.TextButton(i18n.t("detail.back"), on_click=lambda e: on_back())
     )
+    controls.append(ft.Row(detail_actions, alignment=ft.MainAxisAlignment.END))
     return ft.View(route="/detail", controls=controls, padding=24, spacing=12)
 
 

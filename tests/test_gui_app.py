@@ -65,3 +65,36 @@ def test_dashboard_shows_statuses_and_password_dialog_builds():
 
     dlg = views.build_password_dialog(i18n, "a → b", noop, noop)
     assert isinstance(dlg, ft.AlertDialog)
+
+
+def test_detail_terminal_run_has_no_dead_dismiss():
+    from email_export_import.gui import views
+    from email_export_import.gui.i18n import I18n
+    from email_export_import.gui.run_manager import RunSnapshot
+
+    i18n = I18n(locale="en")
+    noop = lambda *a, **k: None
+
+    def button_labels(view):
+        found = []
+        def walk(c):
+            for label_attr in ("text", "value"):
+                v = getattr(c, label_attr, None)
+                if isinstance(v, str):
+                    found.append(v)
+            for child in getattr(c, "controls", []) or []:
+                walk(child)
+            content = getattr(c, "content", None)
+            if isinstance(content, str):  # button labels are plain strings in .content
+                found.append(content)
+            elif content is not None:
+                walk(content)
+        for c in view.controls:
+            walk(c)
+        return found
+
+    done = RunSnapshot(key="k", title="t", status="done", processed=1, total=1,
+                       current_folder=None)
+    labels = button_labels(views.build_detail(i18n, done, noop, noop, noop, noop))
+    assert i18n.t("dash.dismiss") not in labels  # no dead dismiss on detail
+    assert i18n.t("detail.back") in labels
