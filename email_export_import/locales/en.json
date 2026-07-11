@@ -69,5 +69,11 @@
   "settings.title": "Settings",
   "settings.language": "Language",
   "settings.data_location": "Where your data is stored",
-  "settings.data_note": "Migration progress is saved here. Nothing is deleted — completed migrations stay listed as done."
+  "settings.data_note": "Migration progress is saved here. Nothing is deleted — completed migrations stay listed as done.",
+  "plan.preserve_info": "Folders, read/starred flags, dates and attachments are always preserved.",
+  "common.yes": "yes",
+  "common.no": "no",
+  "account.verify_ssl": "Verify certificate",
+  "detail.edit": "Edit connection",
+  "detail.save": "Save"
 }

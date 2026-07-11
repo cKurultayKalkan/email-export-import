@@ -211,6 +211,7 @@ def build_plan(
                 value=spool,
                 on_change=lambda e: on_spool(bool(e.control.value)),
             ),
+            ft.Text(i18n.t("plan.preserve_info"), size=12, italic=True),
             ft.Row(
                 [
                     ft.TextButton(i18n.t("account.back"), on_click=lambda e: on_back()),
@@ -383,6 +384,51 @@ def build_dashboard(
     )
 
 
+def _yesno(i18n: I18n, value: bool) -> str:
+    return i18n.t("common.yes") if value else i18n.t("common.no")
+
+
+def _account_summary(i18n: I18n, title: str, cfg: dict) -> ft.Control:
+    return ft.Column(
+        [
+            ft.Text(title, weight=ft.FontWeight.BOLD, size=13),
+            ft.Text(cfg.get("email", ""), size=12),
+            ft.Text(
+                f"{cfg.get('host', '')}:{cfg.get('port', '')}   "
+                f"SSL: {_yesno(i18n, cfg.get('ssl', True))}   "
+                f"{i18n.t('account.verify_ssl')}: {_yesno(i18n, cfg.get('verify_ssl', True))}",
+                size=12,
+            ),
+        ],
+        spacing=2,
+    )
+
+
+def _account_editor(i18n: I18n, title: str, cfg: dict):
+    host = ft.TextField(label=i18n.t("account.host"), value=str(cfg.get("host", "")), width=300)
+    port = ft.TextField(label=i18n.t("account.port"), value=str(cfg.get("port", 993)), width=110)
+    ssl = ft.Checkbox(label=i18n.t("account.ssl"), value=bool(cfg.get("ssl", True)))
+    verify = ft.Checkbox(label=i18n.t("account.verify_ssl"), value=bool(cfg.get("verify_ssl", True)))
+    controls = [
+        ft.Text(title, weight=ft.FontWeight.BOLD, size=13),
+        ft.Text(cfg.get("email", ""), size=12),  # email is read-only (session key)
+        ft.Row([host, port]),
+        ft.Row([ssl, verify]),
+    ]
+
+    def collect() -> dict:
+        raw = str(port.value or "993").strip()
+        return {
+            "email": cfg.get("email", ""),
+            "host": (host.value or "").strip(),
+            "port": int(raw) if raw.isdigit() else 993,
+            "ssl": bool(ssl.value),
+            "verify_ssl": bool(verify.value),
+        }
+
+    return controls, collect
+
+
 def build_detail(
     i18n: I18n,
     snap: RunSnapshot,
@@ -391,6 +437,10 @@ def build_detail(
     on_cancel: Callable[[str], None],
     on_back: Callable[[], None],
     refs: dict | None = None,
+    config: dict | None = None,
+    editing: bool = False,
+    on_edit: Callable[[], None] | None = None,
+    on_save: Callable[[dict, dict], None] | None = None,
 ) -> ft.View:
     progress, bar, counter = _progress_controls(i18n, snap)
     folder = ft.Text(snap.current_folder or "", size=12)
@@ -428,6 +478,36 @@ def build_detail(
             )
     if snap.spool_pending:
         controls.append(ft.Text(i18n.t("done.spool_pending", count=snap.spool_pending), size=12))
+
+    # Connection panel: paused runs can view and edit the source/destination
+    # before resuming; other statuses show a read-only summary.
+    if config is not None:
+        controls.append(ft.Divider())
+        if editing and snap.status == "paused":
+            src_ctrls, src_collect = _account_editor(
+                i18n, i18n.t("account.source_title"), config.get("src", {})
+            )
+            dst_ctrls, dst_collect = _account_editor(
+                i18n, i18n.t("account.dest_title"), config.get("dst", {})
+            )
+            controls.extend(src_ctrls)
+            controls.extend(dst_ctrls)
+            controls.append(
+                ft.FilledButton(
+                    i18n.t("detail.save"),
+                    icon=ft.Icons.SAVE,
+                    on_click=lambda e: on_save(src_collect(), dst_collect()) if on_save else None,
+                )
+            )
+        else:
+            controls.append(_account_summary(i18n, i18n.t("account.source_title"), config.get("src", {})))
+            controls.append(_account_summary(i18n, i18n.t("account.dest_title"), config.get("dst", {})))
+            if snap.status == "paused" and on_edit is not None:
+                controls.append(
+                    ft.TextButton(i18n.t("detail.edit"), icon=ft.Icons.EDIT,
+                                  on_click=lambda e: on_edit())
+                )
+
     controls.append(ft.Text(i18n.t("done.resume_hint"), size=12))
     detail_actions: list[ft.Control] = []
     if snap.status == "running":

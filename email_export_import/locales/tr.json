@@ -69,5 +69,11 @@
   "settings.title": "Ayarlar",
   "settings.language": "Dil",
   "settings.data_location": "Verilerinizin saklandığı yer",
-  "settings.data_note": "Taşıma ilerlemesi burada saklanır. Hiçbir şey silinmez — tamamlanan taşımalar 'tamamlandı' olarak listede kalır."
+  "settings.data_note": "Taşıma ilerlemesi burada saklanır. Hiçbir şey silinmez — tamamlanan taşımalar 'tamamlandı' olarak listede kalır.",
+  "plan.preserve_info": "Klasörler, okundu/yıldız işaretleri, tarihler ve ekler her zaman korunur.",
+  "common.yes": "evet",
+  "common.no": "hayır",
+  "account.verify_ssl": "Sertifikayı doğrula",
+  "detail.edit": "Bağlantıyı düzenle",
+  "detail.save": "Kaydet"
 }

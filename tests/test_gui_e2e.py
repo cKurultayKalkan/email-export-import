@@ -189,15 +189,88 @@ def test_resume_success_starts_the_run(monkeypatch, tmp_path):
     calls_before = len(page.run_thread_calls)
     assert _click(page.dialog, EN("resume.go")), "resume-go button not found in dialog"
 
-    # After submit: run_async reconnects + starts the run; the resumed run must
-    # actually migrate the 3 messages to the destination.
-    assert _wait(lambda: len(dst.folders["INBOX"]) == 3), \
-        "resumed run never migrated — the Resume click did nothing"
-    # ...and its completion callback must have been marshalled onto the page
-    # thread (run_thread), not left on the raw run_async worker (which cannot
-    # render UI). This is the fix that makes dialogs/view changes appear.
+    # Resume now routes through the plan screen (folder selection before
+    # transfer). It appears via a callback marshalled onto the page thread.
+    assert _wait(lambda: page.views and page.views[-1].route == "/plan"), \
+        "plan screen did not appear after Resume — callback not marshalled/rendered"
     assert len(page.run_thread_calls) > calls_before, \
         "resume callback was not marshalled onto the page thread (UI would not render)"
+
+    # Starting from the plan screen migrates all 3 messages.
+    assert _click(page.views[-1], EN("plan.start")), "Start button not found on plan screen"
+    assert _wait(lambda: len(dst.folders["INBOX"]) == 3), \
+        "migration did not run after Start"
+
+
+def test_resume_plan_honors_skip_from_config(monkeypatch, tmp_path):
+    # Session saved with Junk skipped; resume → plan (Junk unchecked) → Start
+    # must migrate INBOX but not Junk.
+    s = MigrationState.for_pair("a@x.com", "b@y.com", base_dir=tmp_path)
+    s.set_config({
+        "src": {"host": "src.test", "port": 993, "ssl": True, "verify_ssl": True,
+                "email": "a@x.com"},
+        "dst": {"host": "dst.test", "port": 993, "ssl": True, "verify_ssl": False,
+                "email": "b@y.com"},
+        "skip": ["Junk"], "workers": 1, "total": 2,
+    })
+    s.flush()
+    dst = FakeIMAPClient(folders={"INBOX": [], "Junk": []})
+
+    def factory(host, port=993, ssl=True, **kw):
+        if host == "src.test":
+            return FakeIMAPClient(folders={
+                "INBOX": [make_message(uid=1, message_id="<a@x>")],
+                "Junk": [make_message(uid=2, message_id="<b@x>")],
+            })
+        return dst
+
+    monkeypatch.setattr(connection, "IMAPClient", factory)
+
+    page = _run_page()
+    assert _click(page.views[-1], EN("dash.resume"))
+    fields = _text_fields(page.dialog)
+    fields[0].value = "p"
+    fields[1].value = "p"
+    _click(page.dialog, EN("resume.go"))
+    assert _wait(lambda: page.views and page.views[-1].route == "/plan")
+
+    _click(page.views[-1], EN("plan.start"))
+    assert _wait(lambda: len(dst.folders["INBOX"]) == 1)
+    assert dst.folders["Junk"] == []  # skipped folder never migrated
+
+
+def test_detail_edit_saves_connection(monkeypatch, tmp_path):
+    _make_paused_session(tmp_path)  # dst verify_ssl True, host dst.test
+    # no IMAP needed — editing/saving is pure config
+    page = _run_page()
+
+    assert _click(page.views[-1], EN("dash.detail")), "Detail button not found"
+    assert page.views[-1].route == "/detail"
+    assert _click(page.views[-1], EN("detail.edit")), "Edit button not found on detail"
+
+    # editor now shown — find the destination host field and change it
+    detail = page.views[-1]
+    tfs = []
+
+    def collect_tf(c):
+        if isinstance(c, ft.TextField):
+            tfs.append(c)
+        for ch in getattr(c, "controls", []) or []:
+            collect_tf(ch)
+
+    for c in detail.controls:
+        collect_tf(c)
+    # editor has host+port per side; set the last host field (destination)
+    host_fields = [t for t in tfs if t.label == EN("account.host")]
+    assert len(host_fields) == 2
+    host_fields[1].value = "newdst.example.com"
+
+    assert _click(detail, EN("detail.save")), "Save button not found"
+
+    from email_export_import.state import MigrationState as MS
+    reloaded = MS.for_pair("a@x.com", "b@y.com", base_dir=tmp_path)
+    assert reloaded.config["dst"]["host"] == "newdst.example.com"
+    assert reloaded.config["src"]["email"] == "a@x.com"  # untouched
 
 
 def test_resume_connection_failure_is_visible(monkeypatch, tmp_path):

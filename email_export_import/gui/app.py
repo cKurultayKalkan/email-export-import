@@ -24,6 +24,11 @@ class WizardState:
     skip: set[str] = field(default_factory=set)
     workers: int = 4
     spool: bool = False
+    # Set when the plan screen is entered from Resume (reuse the existing state
+    # and key instead of minting a new session).
+    resume_state: object = None
+    resume_key: str | None = None
+    resume_title: str | None = None
 
 
 def main() -> None:
@@ -161,16 +166,23 @@ def _page_main(page: ft.Page) -> None:
         return src_result.conn, dst_result.conn, plan
 
     def _start_resumed(key: str, old_run: Run, cfg: dict, built) -> None:
+        # Resume routes through the plan screen so the user can choose which
+        # folders to transfer (and adjust workers/spool) right before starting.
+        nonlocal ws
         src_conn, dst_conn, plan = built
-        run = Run(
-            key=key, title=old_run.title, src_conn=src_conn, dst_conn=dst_conn,
-            plans=plan.plans, state=old_run.state, workers=manager.default_workers(),
-            total=plan.total, skip=set(cfg.get("skip", [])),
-            spool_enabled=cfg.get("spool", False),
-        )
-        manager.add(run)
-        run.start()
-        show_dashboard()
+        ws = WizardState()
+        ws.src_account = src_conn.account
+        ws.dst_account = dst_conn.account
+        ws.src_conn = src_conn
+        ws.dst_conn = dst_conn
+        ws.plan = plan
+        ws.skip = set(cfg.get("skip", []))
+        ws.workers = cfg.get("workers", manager.default_workers())
+        ws.spool = cfg.get("spool", False)
+        ws.resume_state = old_run.state
+        ws.resume_key = key
+        ws.resume_title = old_run.title
+        _render_plan()
 
     def _account_from_cfg(cfg: dict, password: str, env_var: str) -> Account:
         import os
@@ -189,16 +201,37 @@ def _page_main(page: ft.Page) -> None:
     # ---- detail ---------------------------------------------------------
 
     detail_key: list[str | None] = [None]
+    detail_editing: list[bool] = [False]
+
+    def _save_connection(key: str, new_src: dict, new_dst: dict) -> None:
+        run = manager.get(key)
+        if run is not None:
+            cfg = dict(run.state.config or {})
+            cfg["src"] = new_src
+            cfg["dst"] = new_dst
+            run.state.set_config(cfg)
+            run.state.flush()
+        detail_editing[0] = False
+        show_detail(key)
 
     def _detail_view(snap) -> ft.View:
         refs: dict = {}
+        run = manager.get(snap.key)
+        cfg = run.state.config if run is not None else None
         view = views.build_detail(
             i18n, snap, on_pause=do_pause, on_resume=ask_resume,
             on_cancel=do_cancel, on_back=back_to_dashboard, refs=refs,
+            config=cfg, editing=detail_editing[0],
+            on_edit=lambda: _enter_edit(snap.key),
+            on_save=lambda s, d: _save_connection(snap.key, s, d),
         )
         render["detail_refs"] = refs
         render["detail_sig"] = views.detail_signature(snap)
         return view
+
+    def _enter_edit(key: str) -> None:
+        detail_editing[0] = True
+        show_detail(key)
 
     def show_detail(key: str) -> None:
         detail_key[0] = key
@@ -212,6 +245,7 @@ def _page_main(page: ft.Page) -> None:
 
     def back_to_dashboard() -> None:
         detail_key[0] = None
+        detail_editing[0] = False  # leaving detail discards an unsaved edit
         show_dashboard()
 
     def refresh_current() -> None:
@@ -366,10 +400,10 @@ def _page_main(page: ft.Page) -> None:
             ws.spool = enabled
 
         def _plan_view() -> ft.View:
+            back = back_to_dashboard if ws.resume_key else (lambda: go_account("dest"))
             return views.build_plan(
                 i18n, ws.plan, ws.skip, ws.workers, ws.spool,
-                on_toggle, on_workers, on_spool, start_migration,
-                lambda: go_account("dest"),
+                on_toggle, on_workers, on_spool, start_migration, back,
             )
 
         page.views.clear()
@@ -377,7 +411,7 @@ def _page_main(page: ft.Page) -> None:
         page.update()
 
     def start_migration() -> None:
-        key = f"{ws.src_account.email}__{ws.dst_account.email}"
+        key = ws.resume_key or f"{ws.src_account.email}__{ws.dst_account.email}"
         existing = manager.get(key)
         if existing is not None and existing.is_active:
             highlight[0] = key
@@ -385,9 +419,12 @@ def _page_main(page: ft.Page) -> None:
             return
         active_plans = [p for p in ws.plan.plans if p.source not in ws.skip]
         total = sum(ws.plan.counts.get(p.source, 0) for p in active_plans)
-        state = MigrationState.for_pair(ws.src_account.email, ws.dst_account.email)
+        state = ws.resume_state or MigrationState.for_pair(
+            ws.src_account.email, ws.dst_account.email
+        )
+        title = ws.resume_title or f"{ws.src_account.email} → {ws.dst_account.email}"
         run = Run(
-            key=key, title=f"{ws.src_account.email} → {ws.dst_account.email}",
+            key=key, title=title,
             src_conn=ws.src_conn, dst_conn=ws.dst_conn, plans=active_plans,
             state=state, workers=ws.workers, total=total, skip=ws.skip,
             spool_enabled=ws.spool,
