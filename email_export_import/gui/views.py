@@ -6,8 +6,9 @@ import flet as ft
 
 from ..models import Account
 from ..providers import list_presets
-from .controller import PlanResult, RunSnapshot
+from .controller import PlanResult
 from .i18n import I18n
+from .run_manager import RunSnapshot
 
 
 def _title_bar(i18n: I18n, on_locale: Callable[[str], None]) -> ft.Row:
@@ -23,38 +24,6 @@ def _title_bar(i18n: I18n, on_locale: Callable[[str], None]) -> ft.Row:
             ),
         ]
     )
-
-
-def build_welcome(
-    i18n: I18n,
-    sessions: list,
-    on_resume: Callable[[object], None],
-    on_new: Callable[[], None],
-    on_locale: Callable[[str], None],
-) -> ft.View:
-    rows = []
-    for s in sessions:
-        cfg = s.config or {}
-        rows.append(
-            ft.ListTile(
-                title=ft.Text(f"{cfg['src']['email']} → {cfg['dst']['email']}"),
-                subtitle=ft.Text(
-                    i18n.t("welcome.migrated_count", count=s.migrated_count())
-                ),
-                trailing=ft.FilledButton(
-                    i18n.t("welcome.resume"), on_click=lambda e, s=s: on_resume(s)
-                ),
-            )
-        )
-    body: list[ft.Control] = [
-        _title_bar(i18n, on_locale),
-        ft.Text(i18n.t("welcome.heading"), size=16),
-    ]
-    if rows:
-        body.append(ft.Text(i18n.t("welcome.resume_heading"), weight=ft.FontWeight.BOLD))
-        body.extend(rows)
-    body.append(ft.FilledButton(i18n.t("welcome.new"), on_click=lambda e: on_new()))
-    return ft.View(route="/", controls=body, padding=24, spacing=16)
 
 
 def build_account(
@@ -81,6 +50,7 @@ def build_account(
         label=i18n.t("account.password"), password=True, can_reveal_password=True
     )
     hint = ft.Text("", size=12, color=ft.Colors.AMBER)
+    busy = ft.ProgressRing(width=18, height=18, visible=False)
 
     def preset_changed(e=None):
         for p in presets:
@@ -129,6 +99,13 @@ def build_account(
             pass  # not mounted to a page yet (e.g. called directly in tests)
         on_test(account(p))
 
+    def set_busy(value: bool) -> None:
+        busy.visible = value
+        try:
+            busy.update()
+        except RuntimeError:
+            pass
+
     controls = [
         ft.Text(i18n.t(f"account.{'source' if role == 'source' else 'dest'}_title"),
                 size=18, weight=ft.FontWeight.BOLD),
@@ -136,6 +113,7 @@ def build_account(
         ft.Row(
             [
                 ft.TextButton(i18n.t("account.back"), on_click=lambda e: on_back()),
+                busy,
                 ft.FilledButton(i18n.t("account.test"), on_click=_test_clicked),
             ],
             alignment=ft.MainAxisAlignment.END,
@@ -144,6 +122,7 @@ def build_account(
     return ft.View(route=f"/{role}", controls=controls, padding=24, spacing=12), {
         "account": account,
         "preset_key": lambda: preset_dd.value if preset_dd.value != custom_key else None,
+        "set_busy": set_busy,
     }
 
 
@@ -238,11 +217,112 @@ def build_progress(
     return view, bar, counter, folder
 
 
-def build_done(
-    i18n: I18n, snap: RunSnapshot, on_close: Callable[[], None]
+_STATUS_COLOR = {
+    "running": ft.Colors.BLUE,
+    "queued": ft.Colors.GREY,
+    "paused": ft.Colors.AMBER,
+    "done": ft.Colors.GREEN,
+    "error": ft.Colors.RED,
+    "cancelled": ft.Colors.GREY,
+}
+
+
+def _progress_line(i18n: I18n, snap: RunSnapshot) -> ft.Control:
+    if snap.total > 0:
+        return ft.Column(
+            [
+                ft.ProgressBar(value=snap.processed / snap.total),
+                ft.Text(f"{snap.processed} / {snap.total}", size=12),
+            ],
+            spacing=4,
+        )
+    return ft.Text(i18n.t("dash.migrated_only", count=snap.processed), size=12)
+
+
+def _card_actions(
+    i18n: I18n, snap: RunSnapshot, on_pause, on_resume, on_cancel, on_detail, on_dismiss
+) -> list[ft.Control]:
+    key = snap.key
+    actions: list[ft.Control] = []
+    if snap.status == "running":
+        actions.append(ft.TextButton(i18n.t("dash.pause"), on_click=lambda e, k=key: on_pause(k)))
+        actions.append(ft.TextButton(i18n.t("dash.cancel"), on_click=lambda e, k=key: on_cancel(k)))
+    elif snap.status == "paused":
+        actions.append(ft.FilledButton(i18n.t("dash.resume"), on_click=lambda e, k=key: on_resume(k)))
+        actions.append(ft.TextButton(i18n.t("dash.cancel"), on_click=lambda e, k=key: on_cancel(k)))
+    elif snap.status in ("done", "error", "cancelled"):
+        actions.append(ft.TextButton(i18n.t("dash.dismiss"), on_click=lambda e, k=key: on_dismiss(k)))
+    actions.append(ft.TextButton(i18n.t("dash.detail"), on_click=lambda e, k=key: on_detail(k)))
+    return actions
+
+
+def build_dashboard(
+    i18n: I18n,
+    snapshots: list[RunSnapshot],
+    on_new: Callable[[], None],
+    on_pause: Callable[[str], None],
+    on_resume: Callable[[str], None],
+    on_cancel: Callable[[str], None],
+    on_detail: Callable[[str], None],
+    on_dismiss: Callable[[str], None],
+    on_locale: Callable[[str], None],
+    highlight_key: str | None = None,
+) -> ft.View:
+    cards: list[ft.Control] = []
+    for snap in snapshots:
+        badge = ft.Text(
+            i18n.t(f"status.{snap.status}"),
+            color=_STATUS_COLOR.get(snap.status),
+            weight=ft.FontWeight.BOLD,
+            size=12,
+        )
+        body = [
+            ft.Row([ft.Text(snap.title, weight=ft.FontWeight.BOLD, expand=True), badge]),
+            _progress_line(i18n, snap),
+        ]
+        if snap.error_kind == "quota":
+            body.append(ft.Text(i18n.t("done.quota"), color=ft.Colors.RED, size=12))
+        elif snap.error_kind == "fatal":
+            body.append(ft.Text(snap.error_message or "", color=ft.Colors.RED, size=12))
+        body.append(
+            ft.Row(
+                _card_actions(i18n, snap, on_pause, on_resume, on_cancel, on_detail, on_dismiss),
+                alignment=ft.MainAxisAlignment.END,
+            )
+        )
+        cards.append(
+            ft.Card(
+                content=ft.Container(ft.Column(body, spacing=8), padding=12),
+                bgcolor=ft.Colors.PRIMARY_CONTAINER if snap.key == highlight_key else None,
+            )
+        )
+    if not cards:
+        cards.append(ft.Text(i18n.t("dash.empty")))
+
+    controls: list[ft.Control] = [
+        _title_bar(i18n, on_locale),
+        ft.Text(i18n.t("dash.heading"), size=18, weight=ft.FontWeight.BOLD),
+    ]
+    controls.extend(cards)
+    controls.append(ft.FilledButton(i18n.t("dash.new"), on_click=lambda e: on_new()))
+    return ft.View(
+        route="/", controls=controls, padding=24, spacing=16, scroll=ft.ScrollMode.AUTO
+    )
+
+
+def build_detail(
+    i18n: I18n,
+    snap: RunSnapshot,
+    on_pause: Callable[[str], None],
+    on_resume: Callable[[str], None],
+    on_cancel: Callable[[str], None],
+    on_back: Callable[[], None],
 ) -> ft.View:
     controls: list[ft.Control] = [
-        ft.Text(i18n.t("done.title"), size=18, weight=ft.FontWeight.BOLD)
+        ft.Text(snap.title, size=18, weight=ft.FontWeight.BOLD),
+        ft.Text(i18n.t(f"status.{snap.status}"), color=_STATUS_COLOR.get(snap.status)),
+        _progress_line(i18n, snap),
+        ft.Text(snap.current_folder or "", size=12),
     ]
     if snap.error_kind == "quota":
         controls.append(ft.Text(i18n.t("done.quota"), color=ft.Colors.RED))
@@ -265,13 +345,43 @@ def build_done(
                 ft.Column(
                     [ft.Text(line, size=12) for line in snap.result.failures[:50]],
                     scroll=ft.ScrollMode.AUTO,
-                    height=200,
+                    height=180,
                 )
             )
     if snap.spool_pending:
-        controls.append(
-            ft.Text(i18n.t("done.spool_pending", count=snap.spool_pending), size=12)
-        )
+        controls.append(ft.Text(i18n.t("done.spool_pending", count=snap.spool_pending), size=12))
     controls.append(ft.Text(i18n.t("done.resume_hint"), size=12))
-    controls.append(ft.FilledButton(i18n.t("done.close"), on_click=lambda e: on_close()))
-    return ft.View(route="/done", controls=controls, padding=24, spacing=12)
+    controls.append(
+        ft.Row(
+            _card_actions(i18n, snap, on_pause, on_resume, on_cancel, lambda k: None, lambda k: None)[:-1]
+            + [ft.TextButton(i18n.t("detail.back"), on_click=lambda e: on_back())],
+            alignment=ft.MainAxisAlignment.END,
+        )
+    )
+    return ft.View(route="/detail", controls=controls, padding=24, spacing=12)
+
+
+def build_password_dialog(
+    i18n: I18n,
+    title: str,
+    on_submit: Callable[[str, str], None],
+    on_cancel: Callable[[], None],
+) -> ft.AlertDialog:
+    src_pw = ft.TextField(
+        label=i18n.t("resume.src_password"), password=True, can_reveal_password=True
+    )
+    dst_pw = ft.TextField(
+        label=i18n.t("resume.dst_password"), password=True, can_reveal_password=True
+    )
+    return ft.AlertDialog(
+        modal=True,
+        title=ft.Text(i18n.t("resume.title")),
+        content=ft.Column([ft.Text(title, size=12), src_pw, dst_pw], tight=True, spacing=8),
+        actions=[
+            ft.TextButton(i18n.t("cert.cancel"), on_click=lambda e: on_cancel()),
+            ft.FilledButton(
+                i18n.t("resume.go"),
+                on_click=lambda e: on_submit(src_pw.value or "", dst_pw.value or ""),
+            ),
+        ],
+    )

@@ -20,14 +20,21 @@ def test_wizard_state_defaults():
 
 def test_view_builders_set_route_and_controls():
     from email_export_import.gui import views
-    from email_export_import.gui.controller import PlanResult, RunSnapshot
+    from email_export_import.gui.controller import PlanResult
     from email_export_import.gui.i18n import I18n
+    from email_export_import.gui.run_manager import RunSnapshot
 
     i18n = I18n(locale="en")
     noop = lambda *a, **k: None
 
-    welcome = views.build_welcome(i18n, [], noop, noop, noop)
-    assert welcome.route == "/" and isinstance(welcome.controls, list)
+    snap = RunSnapshot(
+        key="a__b", title="a → b", status="running", processed=3, total=10,
+        current_folder="INBOX",
+    )
+    dash = views.build_dashboard(
+        i18n, [snap], noop, noop, noop, noop, noop, noop, noop
+    )
+    assert dash.route == "/" and isinstance(dash.controls, list)
 
     plan = views.build_plan(
         i18n, PlanResult(plans=[], counts={}, total=0), set(), 4, False,
@@ -35,12 +42,26 @@ def test_view_builders_set_route_and_controls():
     )
     assert plan.route == "/plan" and isinstance(plan.controls, list)
 
-    progress, _bar, _counter, _folder = views.build_progress(i18n, noop)
-    assert progress.route == "/progress" and isinstance(progress.controls, list)
+    detail = views.build_detail(i18n, snap, noop, noop, noop, noop)
+    assert detail.route == "/detail" and isinstance(detail.controls, list)
 
-    done = views.build_done(
-        i18n,
-        RunSnapshot(processed=0, total=0, current_folder=None, running=False),
-        noop,
-    )
-    assert done.route == "/done" and isinstance(done.controls, list)
+
+def test_dashboard_shows_statuses_and_password_dialog_builds():
+    import flet as ft
+
+    from email_export_import.gui import views
+    from email_export_import.gui.i18n import I18n
+    from email_export_import.gui.run_manager import RunSnapshot
+
+    i18n = I18n(locale="en")
+    noop = lambda *a, **k: None
+    snaps = [
+        RunSnapshot(key=f"k{i}", title=f"t{i}", status=s, processed=1, total=0,
+                    current_folder=None)
+        for i, s in enumerate(["running", "paused", "done", "error", "cancelled"])
+    ]
+    dash = views.build_dashboard(i18n, snaps, noop, noop, noop, noop, noop, noop, noop)
+    assert isinstance(dash.controls, list) and len(dash.controls) >= 5
+
+    dlg = views.build_password_dialog(i18n, "a → b", noop, noop)
+    assert isinstance(dlg, ft.AlertDialog)
