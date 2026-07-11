@@ -190,21 +190,29 @@ def _page_main(page: ft.Page) -> None:
         while True:
             time.sleep(0.2)
             try:
-                route = page.views[-1].route if page.views else None
+                if not page.views:
+                    continue
+                route = page.views[-1].route
                 if route == "/":
-                    page.views[-1] = _dashboard_view()
-                    page.update()
+                    new_view = _dashboard_view()
+                    if page.views and page.views[-1].route == "/":
+                        page.views[-1] = new_view
+                        page.update()
                 elif route == "/detail" and detail_key[0] is not None:
                     run = manager.get(detail_key[0])
                     if run is not None:
-                        page.views[-1] = views.build_detail(
+                        new_view = views.build_detail(
                             i18n, run.snapshot(), on_pause=do_pause,
                             on_resume=ask_resume, on_cancel=do_cancel,
                             on_back=back_to_dashboard,
                         )
-                        page.update()
+                        if page.views and page.views[-1].route == "/detail":
+                            page.views[-1] = new_view
+                            page.update()
             except RuntimeError:
-                return  # page closed
+                return  # page closed / controls unmounted
+            except Exception:
+                continue  # transient race — skip this frame
 
     # ---- wizard ---------------------------------------------------------
 
