@@ -1,4 +1,5 @@
 import threading
+import time
 
 import pytest
 from imapclient.exceptions import IMAPClientError
@@ -253,3 +254,46 @@ def test_manager_default_workers(monkeypatch, tmp_path):
     gate.set()
     run.join(timeout=10)
     assert m.default_workers() == 4
+
+
+def test_manager_concurrent_add_remove_during_iteration(monkeypatch, tmp_path):
+    from email_export_import.gui.run_manager import RunManager
+
+    m = RunManager(state_dir=tmp_path)
+    for i in range(20):
+        state = MigrationState.for_pair(f"a{i}@x", "b@y", base_dir=tmp_path)
+        state.set_config({"src": {"email": f"a{i}@x", "host": "h"},
+                          "dst": {"email": "b@y", "host": "h2"}})
+        state.flush()
+        m.add(Run.placeholder(state, state_dir=tmp_path))
+
+    stop = threading.Event()
+    errors = []
+
+    def churn():
+        i = 100
+        while not stop.is_set():
+            state = MigrationState.for_pair(f"c{i}@x", "d@y", base_dir=tmp_path)
+            state.set_config({"src": {"email": f"c{i}@x", "host": "h"},
+                              "dst": {"email": "d@y", "host": "h2"}})
+            state.flush()
+            m.add(Run.placeholder(state, state_dir=tmp_path))
+            m.remove(f"c{i}@x__d@y")
+            i += 1
+
+    def poll():
+        while not stop.is_set():
+            try:
+                m.snapshot_all()
+            except Exception as exc:
+                errors.append(exc)
+                return
+
+    threads = [threading.Thread(target=churn), threading.Thread(target=poll)]
+    for t in threads:
+        t.start()
+    time.sleep(0.5)
+    stop.set()
+    for t in threads:
+        t.join(timeout=5)
+    assert errors == []  # no dictionary-changed-size crash

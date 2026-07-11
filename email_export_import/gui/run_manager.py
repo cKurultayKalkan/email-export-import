@@ -225,37 +225,48 @@ class RunManager:
     def __init__(self, state_dir: Path | None = None) -> None:
         self.state_dir = state_dir
         self._runs: dict[str, Run] = {}
+        self._lock = threading.Lock()
 
     def load_resumable(self) -> None:
         for state in MigrationState.list_resumable(base_dir=self.state_dir):
             key = state.path.stem
-            if key not in self._runs:
-                self._runs[key] = Run.placeholder(state, state_dir=self.state_dir)
+            with self._lock:
+                if key not in self._runs:
+                    self._runs[key] = Run.placeholder(state, state_dir=self.state_dir)
 
     def add(self, run: Run) -> bool:
-        existing = self._runs.get(run.key)
-        if existing is not None and existing.is_active:
-            return False
-        self._runs[run.key] = run
-        return True
+        with self._lock:
+            existing = self._runs.get(run.key)
+            if existing is not None and existing.is_active:
+                return False
+            self._runs[run.key] = run
+            return True
 
-    def get(self, key: str) -> Run | None:
-        return self._runs.get(key)
+    def get(self, key: str) -> "Run | None":
+        with self._lock:
+            return self._runs.get(key)
 
-    def runs(self) -> list[Run]:
-        return sorted(
-            self._runs.values(),
-            key=lambda r: _STATUS_ORDER.get(r.snapshot().status, 9),
-        )
+    def _snapshot_pairs(self):
+        with self._lock:
+            values = list(self._runs.values())
+        pairs = [(r, r.snapshot()) for r in values]
+        pairs.sort(key=lambda rs: _STATUS_ORDER.get(rs[1].status, 9))
+        return pairs
+
+    def runs(self) -> list["Run"]:
+        return [r for r, _ in self._snapshot_pairs()]
 
     def remove(self, key: str) -> None:
-        run = self._runs.pop(key, None)
+        with self._lock:
+            run = self._runs.pop(key, None)
         if run is not None and run.snapshot().status == "cancelled":
             run.state.mark_cancelled()
             run.state.flush()
 
     def active_count(self) -> int:
-        return sum(1 for r in self._runs.values() if r.snapshot().status == "running")
+        with self._lock:
+            values = list(self._runs.values())
+        return sum(1 for r in values if r.snapshot().status in ("running", "stopping"))
 
     def default_workers(self) -> int:
         # Concurrent runs multiply connection pressure on rate-limiting
@@ -263,4 +274,4 @@ class RunManager:
         return 2 if self.active_count() > 0 else 4
 
     def snapshot_all(self) -> list[RunSnapshot]:
-        return [r.snapshot() for r in self.runs()]
+        return [s for _, s in self._snapshot_pairs()]
