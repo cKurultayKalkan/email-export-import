@@ -279,3 +279,58 @@ def test_socket_timeout_configured(monkeypatch):
     monkeypatch.setattr(connection, "IMAPClient", factory)
     MailConnection(ACCOUNT).connect()
     assert captured["timeout"] == 60
+
+
+def test_set_cancel_makes_backoff_cancellable(monkeypatch):
+    import threading
+    import time as time_module
+
+    fake_broken = FakeIMAPClient()
+    install_factory(monkeypatch, [fake_broken] + [FakeIMAPClient() for _ in range(5)])
+    conn = MailConnection(ACCOUNT)  # built WITHOUT a cancel event
+    cancel = threading.Event()
+    conn.set_cancel(cancel)  # planning/serial path wires this in
+
+    def always_fails(client):
+        cancel.set()
+        raise IMAPClientError("still broken")
+
+    start = time_module.monotonic()
+    with pytest.raises(IMAPClientError):
+        conn.with_retry(always_fails)
+    assert time_module.monotonic() - start < 2  # backoff aborted, not slept out
+
+
+def test_jitter_widens_net_backoff_within_bounds(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(connection.time, "sleep", lambda s: recorded.append(s))
+    install_factory(monkeypatch, [FakeIMAPClient() for _ in range(5)])
+    conn = MailConnection(ACCOUNT, jitter=0.5)  # no cancel -> time.sleep path
+    calls = {"n": 0}
+
+    def once_fails(client):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise IMAPClientError("blip")
+        return "ok"
+
+    assert conn.with_retry(once_fails) == "ok"
+    assert len(recorded) == 1
+    assert 1.0 <= recorded[0] <= 1.5  # base 1s + up to 50% jitter
+
+
+def test_no_jitter_is_exact(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(connection.time, "sleep", lambda s: recorded.append(s))
+    install_factory(monkeypatch, [FakeIMAPClient() for _ in range(5)])
+    conn = MailConnection(ACCOUNT)  # jitter defaults to 0
+    calls = {"n": 0}
+
+    def once_fails(client):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise IMAPClientError("blip")
+        return "ok"
+
+    conn.with_retry(once_fails)
+    assert recorded == [1]  # exact, no jitter

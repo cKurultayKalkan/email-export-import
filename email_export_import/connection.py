@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import socket
 import ssl as ssl_module
 import threading
@@ -46,8 +47,10 @@ class MailConnection:
         account: Account,
         max_retries: int = 3,
         cancel: threading.Event | None = None,
+        jitter: float = 0.0,
     ) -> None:
         self.account = account
+        self._jitter = jitter
         self.max_retries = max_retries
         self._client: IMAPClient | None = None
         self._selected: tuple[str, bool] | None = None  # (folder, readonly)
@@ -60,6 +63,12 @@ class MailConnection:
         # button is a bad experience even though the retry is "working as
         # intended".
         self._cancel = cancel
+
+    def set_cancel(self, event: threading.Event) -> None:
+        """Route retry backoffs through *event* so the planning pass and the
+        serial transfer path become cancellable too (parallel workers get their
+        own cancel at construction)."""
+        self._cancel = event
 
     def connect(self) -> IMAPClient:
         kwargs = {}
@@ -120,6 +129,8 @@ class MailConnection:
 
     def _backoff(self, seconds: float) -> None:
         """Sleep, but abort the retry loop immediately if cancelled."""
+        if self._jitter:
+            seconds = seconds + random.uniform(0, seconds * self._jitter)
         if self._cancel is None:
             time.sleep(seconds)
         elif self._cancel.wait(seconds):

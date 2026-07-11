@@ -195,6 +195,10 @@ def migrate(
     progress = TransferProgress()
     lock = threading.Lock()
     stop = cancel if cancel is not None else threading.Event()
+    # Make the planning pass and the serial path honour cancellation too (the
+    # parallel workers build their own cancel-aware connections below).
+    src.set_cancel(stop)
+    dst.set_cancel(stop)
     try:
         units = _plan_units(src, dst, plans, state, progress)
         if not units:
@@ -213,8 +217,10 @@ def migrate(
         errors: list[Exception] = []
 
         def run_worker() -> None:
-            wsrc = MailConnection(src.account, max_retries=src.max_retries, cancel=stop)
-            wdst = MailConnection(dst.account, max_retries=dst.max_retries, cancel=stop)
+            # jitter de-synchronises workers' login-retry backoffs so they don't
+            # re-hit a rate-limiting server in lockstep.
+            wsrc = MailConnection(src.account, max_retries=src.max_retries, cancel=stop, jitter=0.25)
+            wdst = MailConnection(dst.account, max_retries=dst.max_retries, cancel=stop, jitter=0.25)
             try:
                 while not stop.is_set():
                     try:
