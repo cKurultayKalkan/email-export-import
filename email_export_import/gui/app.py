@@ -62,11 +62,13 @@ def _page_main(page: ft.Page) -> None:
         page.update()
 
     def _dashboard_view() -> ft.View:
+        hk = highlight[0]
+        highlight[0] = None
         return views.build_dashboard(
             i18n, manager.snapshot_all(),
             on_new=start_wizard, on_pause=do_pause, on_resume=ask_resume,
             on_cancel=do_cancel, on_detail=show_detail, on_dismiss=do_dismiss,
-            on_locale=set_locale, highlight_key=highlight[0],
+            on_locale=set_locale, highlight_key=hk,
         )
 
     def do_pause(key: str) -> None:
@@ -111,12 +113,20 @@ def _page_main(page: ft.Page) -> None:
         src_result = controller.test_connection(src)
         if not src_result.ok:
             raise RuntimeError(src_result.message or "source connection failed")
-        dst_result = controller.test_connection(dst)
-        if not dst_result.ok:
-            raise RuntimeError(dst_result.message or "destination connection failed")
-        plan = controller.build_plan(
-            src_result.conn, dst_result.conn, set(cfg.get("skip", []))
-        )
+        try:
+            dst_result = controller.test_connection(dst)
+            if not dst_result.ok:
+                raise RuntimeError(dst_result.message or "destination connection failed")
+            try:
+                plan = controller.build_plan(
+                    src_result.conn, dst_result.conn, set(cfg.get("skip", []))
+                )
+            except Exception:
+                dst_result.conn.close()
+                raise
+        except Exception:
+            src_result.conn.close()
+            raise
         return src_result.conn, dst_result.conn, plan
 
     def _start_resumed(key: str, old_run: Run, cfg: dict, built) -> None:
