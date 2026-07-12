@@ -67,6 +67,7 @@ class FakeIMAPClient:
         self.select_calls: list[str] = []
         self.subscribed: set[str] = set()
         self.body_fetches: list[int] = []  # uids whose full body was fetched
+        self.fetched_uids: list[int] = []  # every uid passed to fetch() (incl. metadata)
 
     # --- session ---------------------------------------------------------
     def login(self, user: str, password: str) -> None:
@@ -112,6 +113,7 @@ class FakeIMAPClient:
         return [m["uid"] for m in self.folders[self.selected]]
 
     def fetch(self, uids, data):
+        self.fetched_uids.extend(uids)
         result: dict[int, dict] = {}
         for m in self.folders[self.selected]:
             if m["uid"] not in uids:

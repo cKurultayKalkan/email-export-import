@@ -31,6 +31,9 @@ class MigrationState:
                     "uidvalidity": f["uidvalidity"],
                     "message_ids": set(f["message_ids"]),
                     "uids": set(f["uids"]),
+                    # Absent in states written before the resume fast-path
+                    # existed — they simply earn it on their next pass.
+                    "done_uids": set(f.get("done_uids", [])),
                 }
             self.config = raw.get("config")
             self.status = raw.get("status", "running")
@@ -87,6 +90,16 @@ class MigrationState:
     def mark_completed(self) -> None:
         self.status = "completed"
 
+    def reopen(self) -> None:
+        """Put a finished/cancelled session back in the running state.
+
+        Syncing a completed pair re-runs it to pick up mail that arrived since
+        (dedup skips everything already moved). Without this the state would
+        still say "completed", so a sync interrupted midway would be filed as
+        finished instead of resumable.
+        """
+        self.status = "running"
+
     def mark_cancelled(self) -> None:
         self.status = "cancelled"
 
@@ -97,19 +110,35 @@ class MigrationState:
 
     def _folder(self, folder: str) -> dict:
         return self._folders.setdefault(
-            folder, {"uidvalidity": None, "message_ids": set(), "uids": set()}
+            folder,
+            {"uidvalidity": None, "message_ids": set(), "uids": set(), "done_uids": set()},
         )
 
     def set_uidvalidity(self, folder: str, uidvalidity: int) -> None:
         f = self._folder(folder)
         if f["uidvalidity"] is not None and f["uidvalidity"] != uidvalidity:
-            f["uids"] = set()  # old-generation UIDs are meaningless now
+            # Old-generation UIDs are meaningless now — drop every UID-keyed
+            # record so dedup falls back to Message-IDs.
+            f["uids"] = set()
+            f["done_uids"] = set()
         f["uidvalidity"] = uidvalidity
+
+    def migrated_uids(self, folder: str) -> set[int]:
+        """Every UID already migrated in this folder, in the current UIDVALIDITY
+        generation. A resume drops these from the UID list *before* any FETCH,
+        so it costs work proportional to what is LEFT rather than re-scanning
+        the whole folder's metadata. set_uidvalidity() empties this on a bump,
+        which correctly forces the Message-ID path.
+        """
+        f = self._folders.get(folder)
+        return set(f["done_uids"]) if f is not None else set()
 
     def is_migrated(self, folder: str, message_id: str | None, uid: int) -> bool:
         f = self._folders.get(folder)
         if f is None:
             return False
+        if uid in f["done_uids"]:
+            return True
         if message_id is not None:
             return message_id in f["message_ids"]
         return uid in f["uids"]
@@ -119,7 +148,13 @@ class MigrationState:
         if message_id is not None:
             f["message_ids"].add(message_id)
         else:
+            # No Message-ID to dedup on — the UID is the only identity we have.
             f["uids"].add(uid)
+        # Recorded for every message regardless: this is what lets a resume skip
+        # a finished message without fetching its metadata just to re-read a
+        # Message-ID it has already seen. Kept separate from "uids" so it never
+        # distorts migrated_count().
+        f["done_uids"].add(uid)
 
     def flush(self) -> None:
         raw = {
@@ -128,6 +163,7 @@ class MigrationState:
                     "uidvalidity": f["uidvalidity"],
                     "message_ids": sorted(f["message_ids"]),
                     "uids": sorted(f["uids"]),
+                    "done_uids": sorted(f["done_uids"]),
                 }
                 for name, f in self._folders.items()
             },

@@ -55,9 +55,10 @@ def _plan_units(
     plans: list[FolderPlan],
     state: MigrationState,
     progress: TransferProgress,
+    on_message: MessageCallback | None = None,
 ) -> list[tuple[FolderPlan, list[int]]]:
     """Serial planning pass: record UIDVALIDITY, create missing destination
-    folders, and split every folder's UID list into work units.
+    folders, and split every folder's *unfinished* UIDs into work units.
 
     A rejection here (e.g. namespace-invalid CREATE) fails this folder and
     moves on — one bad folder must not kill the whole run.
@@ -89,8 +90,25 @@ def _plan_units(
             progress.failed += 1
             progress.failures.append(f"{plan.source}: {exc}")
             continue
-        for i in range(0, len(uids), CHUNK_SIZE):
-            units.append((plan, uids[i : i + CHUNK_SIZE]))
+
+        # Resume fast-path. Messages whose UID is already recorded are done, so
+        # drop them here — before any FETCH. Without this, resuming a
+        # half-finished folder re-fetches the metadata of every message it
+        # already moved (tens of thousands of pointless round-trips) just to
+        # re-derive a Message-ID it has already seen. set_uidvalidity() above
+        # has already cleared these if the UIDs went stale.
+        done = state.migrated_uids(plan.source)
+        pending: list[int] = []
+        for uid in uids:
+            if uid in done:
+                progress.skipped += 1
+                if on_message is not None:
+                    on_message(plan.source, uid)  # keep the progress count honest
+            else:
+                pending.append(uid)
+
+        for i in range(0, len(pending), CHUNK_SIZE):
+            units.append((plan, pending[i : i + CHUNK_SIZE]))
     return units
 
 
@@ -130,6 +148,10 @@ def _process_unit(
                 already = state.is_migrated(plan.source, message_id, uid)
             if already:
                 with lock:
+                    # Backfill the UID. States written before UIDs were recorded
+                    # hold only Message-IDs, so this first pass is what earns
+                    # them the no-FETCH fast-path on the next resume.
+                    state.mark_migrated(plan.source, message_id, uid)
                     progress.skipped += 1
                 continue
             # Bodies fetched one at a time and released each iteration, so a
@@ -200,7 +222,7 @@ def migrate(
     src.set_cancel(stop)
     dst.set_cancel(stop)
     try:
-        units = _plan_units(src, dst, plans, state, progress)
+        units = _plan_units(src, dst, plans, state, progress, on_message)
         if not units:
             return progress
 

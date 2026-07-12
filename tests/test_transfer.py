@@ -418,3 +418,78 @@ def test_cancel_mid_run_keeps_state_resumable(monkeypatch, tmp_path):
     assert progress2.migrated == 3
     assert progress2.skipped == 2
     assert len(dst_fake.folders["INBOX"]) == 5
+
+
+def test_resume_skips_finished_uids_without_any_fetch(monkeypatch, tmp_path):
+    """A resume must know where it left off, not re-scan the folder.
+
+    Finished messages are dropped from the UID list before any FETCH, so
+    resuming a fully-migrated folder issues ZERO fetches — and resuming a
+    half-done one touches only the remaining messages.
+    """
+    msgs = [make_message(uid=i, message_id=f"<m{i}@x>") for i in (1, 2, 3, 4)]
+    src = FakeIMAPClient(folders={"INBOX": msgs})
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    src_conn, dst_conn = make_conns(monkeypatch, src, dst)
+    state = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+    plans = [FolderPlan(source="INBOX", dest="INBOX", create=False)]
+
+    first = migrate(src_conn, dst_conn, plans, state)
+    assert first.migrated == 4
+    assert len(dst.folders["INBOX"]) == 4
+
+    # Second pass over the same state: everything is already done, so the
+    # planner must not fetch a single message.
+    src.fetched_uids.clear()
+    src.body_fetches.clear()
+    again = migrate(src_conn, dst_conn, plans, state)
+    assert src.fetched_uids == [], "resume re-fetched metadata for finished mail"
+    assert again.migrated == 0
+    assert again.skipped == 4
+    assert len(dst.folders["INBOX"]) == 4, "resume duplicated mail"
+
+
+def test_resume_fetches_only_the_remaining_uids(monkeypatch, tmp_path):
+    msgs = [make_message(uid=i, message_id=f"<m{i}@x>") for i in (1, 2, 3, 4)]
+    src = FakeIMAPClient(folders={"INBOX": msgs})
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    src_conn, dst_conn = make_conns(monkeypatch, src, dst)
+    state = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+    plans = [FolderPlan(source="INBOX", dest="INBOX", create=False)]
+
+    # Pretend uids 1 and 2 were migrated before the pause.
+    state.set_uidvalidity("INBOX", 1)
+    state.mark_migrated("INBOX", "<m1@x>", 1)
+    state.mark_migrated("INBOX", "<m2@x>", 2)
+
+    progress = migrate(src_conn, dst_conn, plans, state)
+
+    assert sorted(set(src.fetched_uids)) == [3, 4], \
+        "resume touched messages it had already migrated"
+    assert progress.migrated == 2 and progress.skipped == 2
+    assert sorted(src.body_fetches) == [3, 4]
+    assert len(dst.folders["INBOX"]) == 2
+
+
+def test_uidvalidity_bump_forces_a_full_rescan(monkeypatch, tmp_path):
+    """The UID fast-path is only valid within a UIDVALIDITY generation. On a
+    bump the UIDs are meaningless, so dedup must fall back to Message-IDs."""
+    msgs = [make_message(uid=i, message_id=f"<m{i}@x>") for i in (1, 2)]
+    src = FakeIMAPClient(folders={"INBOX": msgs}, uidvalidity=99)
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    src_conn, dst_conn = make_conns(monkeypatch, src, dst)
+    state = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+    plans = [FolderPlan(source="INBOX", dest="INBOX", create=False)]
+
+    # Recorded under an OLD generation; the server now reports uidvalidity=99.
+    state.set_uidvalidity("INBOX", 1)
+    state.mark_migrated("INBOX", "<m1@x>", 1)
+    state.mark_migrated("INBOX", "<m2@x>", 2)
+
+    progress = migrate(src_conn, dst_conn, plans, state)
+
+    # UIDs were dropped, so both were re-examined — but Message-ID dedup still
+    # prevented any duplicate from being written.
+    assert sorted(set(src.fetched_uids)) == [1, 2]
+    assert progress.migrated == 0 and progress.skipped == 2
+    assert dst.folders["INBOX"] == [], "UIDVALIDITY bump caused duplicate mail"

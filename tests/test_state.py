@@ -187,3 +187,19 @@ def test_list_completed_returns_only_completed_with_config(tmp_path):
 
     completed = MigrationState.list_completed(base_dir=base)
     assert [s.config["src"]["email"] for s in completed] == ["a@x"]
+
+
+def test_reopen_makes_a_completed_session_resumable_again(tmp_path):
+    s = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+    s.set_config({"src": {"email": "a@x"}, "dst": {"email": "b@y"}})
+    s.mark_completed()
+    s.flush()
+    assert MigrationState.list_completed(base_dir=tmp_path)
+    assert not MigrationState.list_resumable(base_dir=tmp_path)
+
+    # Syncing a finished pair reopens it, so an interrupted sync is resumable
+    # rather than being filed as already finished.
+    s.reopen()
+    s.flush()
+    assert not MigrationState.list_completed(base_dir=tmp_path)
+    assert [x.path for x in MigrationState.list_resumable(base_dir=tmp_path)] == [s.path]
