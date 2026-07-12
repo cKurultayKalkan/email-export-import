@@ -102,10 +102,17 @@ The desktop app is a **dashboard of migrations**, not a one-shot wizard:
 - **Edit connections.** A migration's detail page shows its source and
   destination; for a paused run you can edit host / port / SSL / certificate
   verification and save it for the next resume.
+- **Bulk migration.** Pick one source provider and one destination server, then
+  add a row per account (email + both passwords) and start them all. Runs begin
+  under a concurrency cap — the rest wait as **queued** cards and start
+  automatically as slots free, so a rate-limiting server isn't hit by every
+  login at once.
 - **Completed migrations stay visible** as "done" cards — nothing silently
-  disappears.
-- **Settings page** with a language switch (Turkish 🇹🇷 / English 🇬🇧, English by
-  default) and where your data is stored.
+  disappears — and a done card offers **Sync new mail**, which re-runs the
+  migration and copies only messages that arrived since. Nothing is duplicated.
+- **Settings page**: language (Turkish 🇹🇷 / English 🇬🇧, English by default),
+  parallel connections per transfer, max simultaneous transfers, update check,
+  and where your data is stored.
 
 The desktop app reads and writes the **same state files as the CLI**, so the two
 are interchangeable mid-migration.
@@ -130,6 +137,11 @@ are interchangeable mid-migration.
   re-running skips everything already copied.
 - **Interrupt anytime** with Ctrl-C (CLI) or Pause (GUI) — at most the in-flight
   message is lost, and it is re-copied on resume.
+- **Resume continues from where it stopped.** Each migrated message's UID is
+  recorded, and finished UIDs are dropped from the work list *before* any fetch,
+  so a resume costs work proportional to what is left — it does not re-scan the
+  mailbox. If the server bumps `UIDVALIDITY` those UIDs become meaningless, so
+  they're discarded and dedup falls back to Message-IDs (still no duplicates).
 - **No duplicates across runs.** The one exception: if a connection drops in the
   *middle* of a single upload, that one message may be duplicated. Resume state
   prevents duplicates across runs, not within a dropped upload.
