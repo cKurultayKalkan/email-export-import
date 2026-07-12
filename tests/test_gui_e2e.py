@@ -239,6 +239,76 @@ def test_resume_plan_honors_skip_from_config(monkeypatch, tmp_path):
     assert dst.folders["Junk"] == []  # skipped folder never migrated
 
 
+def test_cancel_requires_confirmation(monkeypatch, tmp_path):
+    _make_paused_session(tmp_path)
+    page = _run_page()
+    dash = page.views[-1]
+
+    # Clicking Cancel must NOT cancel immediately — it opens an "are you sure?"
+    # confirmation first, so a misclick cannot throw away a migration.
+    assert _click(dash, EN("dash.cancel")), "Cancel button not found on paused card"
+    assert page.dialog is not None, "cancel did not ask for confirmation"
+    confirm_labels = [lbl for lbl, _ in _clickables(page.dialog)]
+    assert EN("cancel.confirm_yes") in confirm_labels
+    assert EN("cancel.confirm_no") in confirm_labels
+
+    # Confirming performs the cancel: the card turns terminal and gains Dismiss
+    # (a paused card never has Dismiss).
+    assert _click(page.dialog, EN("cancel.confirm_yes"))
+    assert _wait(lambda: EN("dash.dismiss")
+                 in [lbl for lbl, _ in _clickables(page.views[-1])]), \
+        "run was not cancelled after confirming"
+
+
+def test_cancel_can_be_declined(monkeypatch, tmp_path):
+    _make_paused_session(tmp_path)
+    page = _run_page()
+    dash = page.views[-1]
+
+    assert _click(dash, EN("dash.cancel"))
+    assert _click(page.dialog, EN("cancel.confirm_no")), "decline button missing"
+    assert page.dialog is None, "declining should close the dialog"
+    # The run stays paused: Resume present, no Dismiss.
+    labels = [lbl for lbl, _ in _clickables(page.views[-1])]
+    assert EN("dash.resume") in labels
+    assert EN("dash.dismiss") not in labels
+
+
+def test_resume_from_cancelled_card(monkeypatch, tmp_path):
+    _make_paused_session(tmp_path)
+    dst = FakeIMAPClient(folders={"INBOX": []})
+
+    def factory(host, port=993, ssl=True, **kw):
+        if host == "src.test":
+            return FakeIMAPClient(
+                folders={"INBOX": [make_message(uid=i, message_id=f"<m{i}@x>")
+                                   for i in (1, 2, 3)]}
+            )
+        return dst
+
+    monkeypatch.setattr(connection, "IMAPClient", factory)
+
+    page = _run_page()
+    # Cancel the paused run (through the confirmation).
+    assert _click(page.views[-1], EN("dash.cancel"))
+    assert _click(page.dialog, EN("cancel.confirm_yes"))
+    assert _wait(lambda: EN("dash.resume")
+                 in [lbl for lbl, _ in _clickables(page.views[-1])]), \
+        "cancelled card offers no Resume"
+
+    # Resuming a cancelled run reconnects and routes through the plan screen,
+    # exactly like resuming a paused one — the on-disk progress is intact.
+    assert _click(page.views[-1], EN("dash.resume"))
+    assert page.dialog is not None, "password dialog did not open for cancelled resume"
+    fields = _text_fields(page.dialog)
+    assert len(fields) == 2
+    fields[0].value = "p"
+    fields[1].value = "p"
+    assert _click(page.dialog, EN("resume.go"))
+    assert _wait(lambda: page.views and page.views[-1].route == "/plan"), \
+        "cancelled resume did not reach the plan screen"
+
+
 def test_detail_edit_saves_connection(monkeypatch, tmp_path):
     _make_paused_session(tmp_path)  # dst verify_ssl True, host dst.test
     # no IMAP needed — editing/saving is pure config

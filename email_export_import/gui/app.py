@@ -118,10 +118,28 @@ def _page_main(page: ft.Page) -> None:
         refresh_current()
 
     def do_cancel(key: str) -> None:
+        # Cancelling is a click away on every card, so guard it behind an
+        # "are you sure?" confirmation — a misclick must not discard a run.
         run = manager.get(key)
-        if run is not None:
+        if run is None:
+            return
+
+        def confirm(_e=None) -> None:
+            page.pop_dialog()
             run.cancel()
-        refresh_current()
+            refresh_current()
+
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text(i18n.t("cancel.confirm_title")),
+                content=ft.Text(i18n.t("cancel.confirm_body")),
+                actions=[
+                    ft.TextButton(i18n.t("cancel.confirm_no"), on_click=lambda e: page.pop_dialog()),
+                    ft.FilledButton(i18n.t("cancel.confirm_yes"), on_click=confirm),
+                ],
+            )
+        )
 
     def do_dismiss(key: str) -> None:
         manager.remove(key)

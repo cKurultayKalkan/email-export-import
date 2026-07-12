@@ -101,6 +101,48 @@ def test_detail_terminal_run_has_no_dead_dismiss():
     assert i18n.t("detail.back") in labels
 
 
+def _labels_of(view):
+    found = []
+
+    def walk(c):
+        for attr in ("text", "value"):
+            v = getattr(c, attr, None)
+            if isinstance(v, str):
+                found.append(v)
+        content = getattr(c, "content", None)
+        if isinstance(content, str):  # button labels are plain strings in .content
+            found.append(content)
+        elif content is not None:
+            walk(content)
+        for child in getattr(c, "controls", []) or []:
+            walk(child)
+
+    for c in view.controls:
+        walk(c)
+    return found
+
+
+def test_cancelled_card_and_detail_offer_resume():
+    # A cancelled migration keeps its on-disk progress, so it must be resumable
+    # (not a dead end that can only be dismissed).
+    from email_export_import.gui import views
+    from email_export_import.gui.i18n import I18n
+    from email_export_import.gui.run_manager import RunSnapshot
+
+    i18n = I18n(locale="en")
+    noop = lambda *a, **k: None
+    snap = RunSnapshot(key="k", title="t", status="cancelled", processed=5,
+                       total=10, current_folder=None)
+
+    dash = views.build_dashboard(i18n, [snap], noop, noop, noop, noop, noop, noop, noop)
+    dash_labels = _labels_of(dash)
+    assert i18n.t("dash.resume") in dash_labels
+    assert i18n.t("dash.dismiss") in dash_labels  # still dismissable
+
+    detail = views.build_detail(i18n, snap, noop, noop, noop, noop)
+    assert i18n.t("dash.resume") in _labels_of(detail)
+
+
 def test_reconnect_closes_source_when_destination_fails(monkeypatch, tmp_path):
     import flet  # noqa: F401 (gui extra present)
     from email_export_import import connection

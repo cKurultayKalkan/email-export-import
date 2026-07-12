@@ -329,7 +329,12 @@ def _card_actions(
     elif snap.status == "paused":
         actions.append(ft.FilledButton(i18n.t("dash.resume"), on_click=lambda e, k=key: on_resume(k)))
         actions.append(ft.TextButton(i18n.t("dash.cancel"), on_click=lambda e, k=key: on_cancel(k)))
-    elif snap.status in ("done", "error", "cancelled"):
+    elif snap.status == "cancelled":
+        # A cancelled run keeps its on-disk progress, so it can be resumed
+        # (reconnects from scratch) or dismissed for good.
+        actions.append(ft.FilledButton(i18n.t("dash.resume"), on_click=lambda e, k=key: on_resume(k)))
+        actions.append(ft.TextButton(i18n.t("dash.dismiss"), on_click=lambda e, k=key: on_dismiss(k)))
+    elif snap.status in ("done", "error"):
         actions.append(ft.TextButton(i18n.t("dash.dismiss"), on_click=lambda e, k=key: on_dismiss(k)))
     actions.append(ft.TextButton(i18n.t("dash.detail"), on_click=lambda e, k=key: on_detail(k)))
     return actions
@@ -532,6 +537,10 @@ def build_detail(
         )
         detail_actions.append(
             ft.TextButton(i18n.t("dash.cancel"), on_click=lambda e: on_cancel(snap.key))
+        )
+    elif snap.status == "cancelled":
+        detail_actions.append(
+            ft.FilledButton(i18n.t("dash.resume"), on_click=lambda e: on_resume(snap.key))
         )
     detail_actions.append(
         ft.TextButton(i18n.t("detail.back"), on_click=lambda e: on_back())
