@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import locale as locale_module
-import os
 from pathlib import Path
 
 LOCALES_DIR = Path(__file__).resolve().parent.parent / "locales"
@@ -48,13 +47,9 @@ class I18n:
         if locale not in self._tables:
             raise ValueError(f"unknown locale: {locale!r}")
         self.locale = locale
-        self._prefs_path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(
-            self._prefs_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
-        )
-        with os.fdopen(fd, "w") as fh:
-            fh.write(json.dumps({"locale": locale}))
-        os.chmod(self._prefs_path, 0o600)
+        from . import prefs
+
+        prefs.save_pref(self._prefs_path, "locale", locale)
 
     def t(self, key: str, **fmt) -> str:
         text = self._tables.get(self.locale, {}).get(key)

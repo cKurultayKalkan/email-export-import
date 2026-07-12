@@ -357,3 +357,31 @@ def test_load_completed_shows_done_cards(tmp_path):
     assert by_key["a@x__b@y"].processed == 1
     assert by_key["a@x__b@y"].total == 100
     assert by_key["c@x__d@y"].status == "paused"
+
+
+def test_mark_failed_sets_error_snapshot():
+    st = MigrationState.for_pair("a@x", "b@y")
+    run = Run(key="k", title="t", src_conn=None, dst_conn=None, plans=None,
+              state=st, workers=2, total=0)
+    run.mark_failed("boom")
+    snap = run.snapshot()
+    assert snap.status == "error"
+    assert snap.error_kind == "fatal"
+    assert snap.error_message == "boom"
+
+
+def test_run_manager_default_max_active_is_two():
+    from email_export_import.gui.run_manager import RunManager
+    assert RunManager().max_active == 2
+
+
+def test_default_workers_follows_the_setting_and_halves_when_busy(monkeypatch):
+    from email_export_import.gui.run_manager import RunManager
+
+    m = RunManager(workers=1)
+    assert m.default_workers() == 1  # idle
+    monkeypatch.setattr(RunManager, "active_count", lambda self: 1)
+    assert m.default_workers() == 1, "must never drop below one worker"
+
+    m2 = RunManager(workers=4)
+    assert m2.default_workers() == 2, "a live run halves the per-run default"

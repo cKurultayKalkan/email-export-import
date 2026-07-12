@@ -113,6 +113,10 @@ class Run:
 
         src_email = self._src_conn.account.email
         dst_email = self._dst_conn.account.email
+        # A run that is starting is, by definition, running — this also reopens
+        # a completed session being synced for newly-arrived mail, so an
+        # interrupted sync stays resumable instead of being filed as finished.
+        self._state.reopen()
         self._state.set_config(
             {
                 "src": _account_config(self._src_conn.account),
@@ -179,6 +183,13 @@ class Run:
             self._stop_requested = True
         self._cancel.set()
 
+    def mark_failed(self, message: str) -> None:
+        """Fail a queued placeholder (its connect/plan raised). The card shows
+        the error; other bulk accounts are unaffected."""
+        with self._lock:
+            self._status = "error"
+            self._error = ("fatal", message)
+
     def cancel(self) -> None:
         with self._lock:
             if self._status in ("done", "error", "cancelled"):
@@ -237,8 +248,17 @@ _STATUS_ORDER = {
 class RunManager:
     """Keyed collection of Runs backing the dashboard."""
 
-    def __init__(self, state_dir: Path | None = None) -> None:
+    def __init__(
+        self, state_dir: Path | None = None, max_active: int = 2, workers: int = 4
+    ) -> None:
         self.state_dir = state_dir
+        # Cap on simultaneously-active bulk runs (protects a rate-limiting
+        # destination). Counts in-flight connects too; see app.pump_bulk.
+        self.max_active = max_active
+        # Parallel connections per run. Lowering this reduces sustained
+        # concurrent TCP writes — worth doing on a machine whose network stack
+        # falls over under bulk upload.
+        self.workers = workers
         self._runs: dict[str, Run] = {}
         self._lock = threading.Lock()
 
@@ -293,7 +313,9 @@ class RunManager:
     def default_workers(self) -> int:
         # Concurrent runs multiply connection pressure on rate-limiting
         # servers; halve the per-run default when another run is live.
-        return 2 if self.active_count() > 0 else 4
+        if self.active_count() > 0:
+            return max(1, self.workers // 2)
+        return self.workers
 
     def snapshot_all(self) -> list[RunSnapshot]:
         return [s for _, s in self._snapshot_pairs()]

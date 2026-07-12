@@ -31,6 +31,10 @@ def build_settings(
     on_back: Callable[[], None],
     version: str = "",
     on_check_update: Callable[[], None] | None = None,
+    max_active: int = 2,
+    on_max_active: Callable[[int], None] | None = None,
+    workers: int = 4,
+    on_workers: Callable[[int], None] | None = None,
 ) -> ft.View:
     language = ft.Dropdown(
         label=i18n.t("settings.language"),
@@ -42,9 +46,27 @@ def build_settings(
         ],
         on_select=lambda e: on_locale(e.control.value),
     )
+    concurrency = ft.Dropdown(
+        label=i18n.t("settings.max_active"),
+        value=str(max_active),
+        width=280,
+        options=[ft.dropdown.Option(str(n)) for n in (1, 2, 3, 4)],
+        on_select=lambda e: on_max_active(int(e.control.value)) if on_max_active else None,
+    )
+    workers_dd = ft.Dropdown(
+        label=i18n.t("settings.workers"),
+        value=str(workers),
+        width=280,
+        options=[ft.dropdown.Option(str(n)) for n in (1, 2, 4, 8)],
+        on_select=lambda e: on_workers(int(e.control.value)) if on_workers else None,
+    )
     controls: list[ft.Control] = [
         ft.Text(i18n.t("settings.title"), size=20, weight=ft.FontWeight.BOLD),
         language,
+        concurrency,
+        ft.Text(i18n.t("settings.max_active_note"), size=12),
+        workers_dd,
+        ft.Text(i18n.t("settings.workers_note"), size=12),
         ft.Divider(),
         ft.Text(f"{i18n.t('settings.version')}: {version}", size=13),
         ft.TextButton(
@@ -64,6 +86,29 @@ def build_settings(
     return ft.View(route="/settings", controls=controls, padding=24, spacing=14)
 
 
+_CUSTOM_PRESET_KEY = "__custom__"
+
+
+def _fill_from_preset(presets, key, host, port, use_ssl, hint) -> None:
+    """Copy a provider preset's server settings into the given controls (values
+    only — the caller decides when/whether to push .update())."""
+    for p in presets:
+        if p.key == key:
+            host.value, port.value, use_ssl.value = p.host, str(p.port), p.ssl
+            hint.value = p.app_password_hint or ""
+            return
+    hint.value = ""
+
+
+def _preset_dropdown(i18n: I18n, presets, value: str) -> ft.Dropdown:
+    return ft.Dropdown(
+        label=i18n.t("account.provider"),
+        value=value,
+        options=[ft.dropdown.Option(p.key, p.name) for p in presets]
+        + [ft.dropdown.Option(_CUSTOM_PRESET_KEY, i18n.t("account.custom"))],
+    )
+
+
 def build_account(
     i18n: I18n,
     role: str,  # "source" | "dest"
@@ -73,13 +118,8 @@ def build_account(
     status_text: ft.Text,
 ) -> tuple[ft.View, dict]:
     presets = list_presets()
-    custom_key = "__custom__"
-    preset_dd = ft.Dropdown(
-        label=i18n.t("account.provider"),
-        value=initial.get("preset", custom_key),
-        options=[ft.dropdown.Option(p.key, p.name) for p in presets]
-        + [ft.dropdown.Option(custom_key, i18n.t("account.custom"))],
-    )
+    custom_key = _CUSTOM_PRESET_KEY
+    preset_dd = _preset_dropdown(i18n, presets, initial.get("preset", custom_key))
     host = ft.TextField(label=i18n.t("account.host"), value=initial.get("host", ""))
     port = ft.TextField(label=i18n.t("account.port"), value=str(initial.get("port", 993)), width=110)
     use_ssl = ft.Checkbox(label=i18n.t("account.ssl"), value=initial.get("ssl", True))
@@ -91,13 +131,7 @@ def build_account(
     busy = ft.ProgressRing(width=18, height=18, visible=False)
 
     def preset_changed(e=None):
-        for p in presets:
-            if p.key == preset_dd.value:
-                host.value, port.value, use_ssl.value = p.host, str(p.port), p.ssl
-                hint.value = p.app_password_hint or ""
-                break
-        else:
-            hint.value = ""
+        _fill_from_preset(presets, preset_dd.value, host, port, use_ssl, hint)
         try:
             host.update(); port.update(); use_ssl.update(); hint.update()
         except RuntimeError:
@@ -161,6 +195,160 @@ def build_account(
         "account": account,
         "preset_key": lambda: preset_dd.value if preset_dd.value != custom_key else None,
         "set_busy": set_busy,
+    }
+
+
+def _parse_port(raw: str | None) -> int | None:
+    try:
+        value = int((raw or "993").strip())
+    except (ValueError, AttributeError):
+        return None
+    return value if 1 <= value <= 65535 else None
+
+
+def build_bulk(
+    i18n: I18n,
+    on_start: Callable[[list[tuple[Account, Account]], str | None], None],
+    on_back: Callable[[], None],
+) -> tuple[ft.View, dict]:
+    """Bulk entry: one source provider + one destination server, then a row per
+    account (email + both passwords). collect() validates and returns
+    (source, destination) Account pairs; Start-all hands the valid pairs on."""
+    presets = list_presets()
+    custom_key = _CUSTOM_PRESET_KEY
+
+    preset_dd = _preset_dropdown(i18n, presets, custom_key)
+    src_host = ft.TextField(label=i18n.t("account.host"), expand=True)
+    src_port = ft.TextField(label=i18n.t("account.port"), value="993", width=110)
+    src_ssl = ft.Checkbox(label=i18n.t("account.ssl"), value=True)
+    hint = ft.Text("", size=12, color=ft.Colors.AMBER)
+
+    def preset_changed(e=None):
+        _fill_from_preset(presets, preset_dd.value, src_host, src_port, src_ssl, hint)
+        try:
+            src_host.update(); src_port.update(); src_ssl.update(); hint.update()
+        except RuntimeError:
+            pass  # not mounted yet
+
+    preset_dd.on_select = preset_changed
+
+    dst_host = ft.TextField(label=i18n.t("account.host"), expand=True)
+    dst_port = ft.TextField(label=i18n.t("account.port"), value="993", width=110)
+    dst_ssl = ft.Checkbox(label=i18n.t("account.ssl"), value=True)
+    dst_verify = ft.Checkbox(label=i18n.t("account.verify_ssl"), value=True)
+    dst = {"host": dst_host, "port": dst_port, "ssl": dst_ssl, "verify": dst_verify}
+
+    status = ft.Text("", size=12, color=ft.Colors.RED)
+    rows: list[dict] = []
+    rows_column = ft.Column(spacing=8)
+
+    def _remove(row: dict) -> None:
+        if len(rows) <= 1:
+            return  # always keep one row
+        rows.remove(row)
+        rows_column.controls.remove(row["control"])
+        try:
+            rows_column.update()
+        except RuntimeError:
+            pass
+
+    def add_row(e=None) -> dict:
+        email = ft.TextField(label=i18n.t("bulk.email"), expand=True)
+        src_pw = ft.TextField(
+            label=i18n.t("bulk.src_password"), password=True, can_reveal_password=True, width=180
+        )
+        dst_pw = ft.TextField(
+            label=i18n.t("bulk.dst_password"), password=True, can_reveal_password=True, width=180
+        )
+        row = {"email": email, "src_pw": src_pw, "dst_pw": dst_pw}
+        row["control"] = ft.Row(
+            [email, src_pw, dst_pw,
+             ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, tooltip=i18n.t("bulk.remove_row"),
+                           on_click=lambda _e, r=row: _remove(r))],
+            alignment=ft.MainAxisAlignment.START,
+        )
+        rows.append(row)
+        rows_column.controls.append(row["control"])
+        try:
+            rows_column.update()
+        except RuntimeError:
+            pass
+        return row
+
+    add_row()  # start with one empty row
+
+    def preset_key() -> str | None:
+        return preset_dd.value if preset_dd.value != custom_key else None
+
+    def collect() -> list[tuple[Account, Account]]:
+        sp = _parse_port(src_port.value)
+        dp = _parse_port(dst_port.value)
+        if not (src_host.value or "").strip() or sp is None:
+            raise ValueError(i18n.t("bulk.dest_invalid"))
+        if not (dst_host.value or "").strip() or dp is None:
+            raise ValueError(i18n.t("bulk.dest_invalid"))
+        pairs: list[tuple[Account, Account]] = []
+        for idx, row in enumerate(rows, start=1):
+            email = (row["email"].value or "").strip()
+            src_pw = row["src_pw"].value or ""
+            dst_pw = row["dst_pw"].value or ""
+            if not email and not src_pw and not dst_pw:
+                continue  # blank row — skip
+            if not (email and src_pw and dst_pw):
+                raise ValueError(i18n.t("bulk.row_invalid", n=idx))
+            src = Account(host=src_host.value.strip(), port=sp, ssl=bool(src_ssl.value),
+                          email=email, password=src_pw, verify_ssl=True)
+            dst_acc = Account(host=dst_host.value.strip(), port=dp, ssl=bool(dst_ssl.value),
+                              email=email, password=dst_pw, verify_ssl=bool(dst_verify.value))
+            pairs.append((src, dst_acc))
+        if not pairs:
+            raise ValueError(i18n.t("bulk.no_rows"))
+        return pairs
+
+    def start_clicked(e=None) -> None:
+        try:
+            pairs = collect()
+        except ValueError as exc:
+            status.value = str(exc)
+            try:
+                status.update()
+            except RuntimeError:
+                pass
+            return
+        on_start(pairs, preset_key())
+
+    controls = [
+        ft.Text(i18n.t("bulk.title"), size=18, weight=ft.FontWeight.BOLD),
+        ft.Text(i18n.t("bulk.source_title"), weight=ft.FontWeight.BOLD, size=13),
+        preset_dd,
+        ft.Row([src_host, src_port, src_ssl]),
+        hint,
+        ft.Divider(),
+        ft.Text(i18n.t("bulk.dest_title"), weight=ft.FontWeight.BOLD, size=13),
+        ft.Row([dst_host, dst_port, dst_ssl, dst_verify]),
+        ft.Divider(),
+        ft.Text(i18n.t("bulk.accounts_title"), weight=ft.FontWeight.BOLD, size=13),
+        rows_column,
+        ft.TextButton(i18n.t("bulk.add_row"), icon=ft.Icons.ADD, on_click=add_row),
+        status,
+        ft.Row(
+            [
+                ft.TextButton(i18n.t("account.back"), on_click=lambda e: on_back()),
+                ft.FilledButton(i18n.t("bulk.start_all"), on_click=start_clicked),
+            ],
+            alignment=ft.MainAxisAlignment.END,
+        ),
+    ]
+    view = ft.View(route="/bulk", controls=controls, padding=24, spacing=12,
+                   scroll=ft.ScrollMode.AUTO)
+    return view, {
+        "collect": collect,
+        "preset_key": preset_key,
+        "rows": lambda: rows,
+        "_add_row": add_row,
+        "_src": {"host": src_host, "port": src_port, "ssl": src_ssl},
+        "_dst": dst,
+        "status": status,
     }
 
 
@@ -335,6 +523,10 @@ def _card_actions(
         actions.append(ft.FilledButton(i18n.t("dash.resume"), on_click=lambda e, k=key: on_resume(k)))
         actions.append(ft.TextButton(i18n.t("dash.dismiss"), on_click=lambda e, k=key: on_dismiss(k)))
     elif snap.status in ("done", "error"):
+        # A finished migration can be re-run to pick up mail that arrived since:
+        # dedup skips everything already moved, so only new messages are copied.
+        actions.append(ft.FilledButton(i18n.t("dash.sync"), tooltip=i18n.t("sync.hint"),
+                                       on_click=lambda e, k=key: on_resume(k)))
         actions.append(ft.TextButton(i18n.t("dash.dismiss"), on_click=lambda e, k=key: on_dismiss(k)))
     actions.append(ft.TextButton(i18n.t("dash.detail"), on_click=lambda e, k=key: on_detail(k)))
     return actions
@@ -350,6 +542,7 @@ def build_dashboard(
     on_detail: Callable[[str], None],
     on_dismiss: Callable[[str], None],
     on_settings: Callable[[], None],
+    on_new_bulk: Callable[[], None] = lambda: None,
     highlight_key: str | None = None,
     refs: dict | None = None,
 ) -> ft.View:
@@ -392,7 +585,17 @@ def build_dashboard(
         ft.Text(i18n.t("dash.heading"), size=18, weight=ft.FontWeight.BOLD),
     ]
     controls.extend(cards)
-    controls.append(ft.FilledButton(i18n.t("dash.new"), on_click=lambda e: on_new()))
+    controls.append(
+        ft.Row(
+            [
+                ft.FilledButton(i18n.t("dash.new"), on_click=lambda e: on_new()),
+                ft.OutlinedButton(
+                    i18n.t("dash.new_bulk"), icon=ft.Icons.GROUP_ADD,
+                    on_click=lambda e: on_new_bulk(),
+                ),
+            ]
+        )
+    )
     return ft.View(
         route="/", controls=controls, padding=24, spacing=16, scroll=ft.ScrollMode.AUTO
     )
@@ -541,6 +744,11 @@ def build_detail(
     elif snap.status == "cancelled":
         detail_actions.append(
             ft.FilledButton(i18n.t("dash.resume"), on_click=lambda e: on_resume(snap.key))
+        )
+    elif snap.status in ("done", "error"):
+        # Re-run a finished migration to pull in mail that arrived since.
+        detail_actions.append(
+            ft.FilledButton(i18n.t("dash.sync"), on_click=lambda e: on_resume(snap.key))
         )
     detail_actions.append(
         ft.TextButton(i18n.t("detail.back"), on_click=lambda e: on_back())

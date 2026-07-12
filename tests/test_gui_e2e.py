@@ -40,9 +40,11 @@ class FakePage:
         self.title = ""
         self.window = FakeWindow()
         self.views: list = []
+        self.overlay: list = []
         self.dialog = None
         self.update_calls = 0
         self.run_thread_calls: list = []
+        self.run_task_calls: list = []
 
     def update(self):
         self.update_calls += 1
@@ -55,15 +57,30 @@ class FakePage:
         return None
 
     def run_thread(self, fn, *args, **kwargs):
-        # Model Flet: run_thread runs the handler on the page's executor (with
-        # the page context that makes UI updates render). We run it on a real
-        # daemon thread, exactly like flet, and record it so a test can prove a
-        # callback was marshalled through here (the fix for run_async rendering).
+        # Model Flet: run_thread runs the handler on the page's executor — a
+        # bare worker thread, OFF the event loop. In flet 0.85 UI mutation is
+        # only race-free on the loop, so app code must NOT route UI callbacks
+        # here; recording it lets a test assert nothing does.
         self.run_thread_calls.append(fn)
         threading.Thread(target=lambda: fn(*args, **kwargs), daemon=True).start()
 
     def run_task(self, fn, *a):
-        pass
+        # Model Flet: run_task runs a coroutine ON the event loop (via
+        # run_coroutine_threadsafe). Headless we drive it to completion on a
+        # daemon thread with its own loop, and record it so a test can prove a
+        # UI callback / the poll was marshalled onto the loop — the fix that
+        # keeps buttons live.
+        import asyncio
+
+        self.run_task_calls.append(fn)
+
+        def runner():
+            try:
+                asyncio.run(fn(*a))
+            except Exception:
+                pass
+
+        threading.Thread(target=runner, daemon=True).start()
 
 
 def _walk(control, out):
@@ -162,6 +179,276 @@ def _wait(pred, timeout=4.0):
     return False
 
 
+def test_ui_work_is_marshalled_onto_the_event_loop_not_the_executor(monkeypatch, tmp_path):
+    """Regression: buttons went dead (no hover/click/action) because the poll
+    and the run_async result callbacks mutated the UI from executor threads
+    (page.run_thread). In flet 0.85 control.update()/page.update() run the diff
+    engine and enqueue frames on a loop-bound asyncio.Queue with no thread
+    marshalling — safe ONLY on the event loop. Off-loop mutation races the
+    loop's own click handling and desyncs the client, so clicks reach nothing.
+
+    Every UI-touching path must therefore go through run_task (the loop), never
+    run_thread (the executor). This test fails on the old routing.
+    """
+    _make_paused_session(tmp_path)
+    dst = FakeIMAPClient(folders={"INBOX": []})
+
+    def factory(host, port=993, ssl=True, **kw):
+        if host == "src.test":
+            return FakeIMAPClient(
+                folders={"INBOX": [make_message(uid=1, message_id="<m1@x>")]}
+            )
+        return dst
+
+    monkeypatch.setattr(connection, "IMAPClient", factory)
+
+    page = _run_page()
+
+    # The background poll must be started on the event loop.
+    assert any(getattr(fn, "__name__", "") == "poll" for fn in page.run_task_calls), \
+        "poll was not started via run_task — it runs off the event loop"
+
+    # Resume's reconnect result must be delivered on the loop too.
+    assert _click(page.views[-1], EN("dash.resume"))
+    fields = _text_fields(page.dialog)
+    fields[0].value = "p"
+    fields[1].value = "p"
+    tasks_before = len(page.run_task_calls)
+    assert _click(page.dialog, EN("resume.go"))
+    assert _wait(lambda: page.views and page.views[-1].route == "/plan"), \
+        "resume callback did not render the plan screen"
+    assert len(page.run_task_calls) > tasks_before, \
+        "resume callback was not marshalled onto the event loop"
+
+    # Nothing UI-related may ever hop to the executor.
+    assert page.run_thread_calls == [], \
+        f"UI work ran on the executor (off-loop): {page.run_thread_calls}"
+
+
+class _SharedMailboxFake(FakeIMAPClient):
+    """A fake whose mailbox is keyed by the logged-in account email and shared
+    across every connection for that account — like a real server, where the
+    run's planning connection and its parallel worker connections all see the
+    same UIDs. (A fresh mailbox per connection would make every message look
+    vanished under the parallel worker path.)"""
+
+    def __init__(self, mailboxes, seed, gate=None, gate_email=None):
+        super().__init__(folders={"INBOX": []})
+        self._mailboxes = mailboxes
+        self._seed = seed
+        self._gate = gate
+        self._gate_email = gate_email
+        self._user = None
+
+    def login(self, user, password):
+        super().login(user, password)
+        self._user = user
+        self.folders = self._mailboxes.setdefault(user, self._seed(user))
+
+    def list_folders(self):
+        if self._gate is not None and self._user == self._gate_email:
+            self._gate.wait(timeout=5)
+        return super().list_folders()
+
+
+def _bulk_factories(gate=None, gate_email=None):
+    """Return (factory, src_mailboxes, dst_mailboxes). Source accounts each get
+    one message; destinations start empty. Mailboxes are shared per email."""
+    src_mailboxes: dict = {}
+    dst_mailboxes: dict = {}
+
+    def seed_src(email):
+        return {"INBOX": [make_message(uid=1, message_id=f"<{email}>")]}
+
+    def factory(host, port=993, ssl=True, **kw):
+        if host == "src.test":
+            return _SharedMailboxFake(src_mailboxes, seed_src, gate, gate_email)
+        return _SharedMailboxFake(dst_mailboxes, lambda e: {"INBOX": []})
+
+    return factory, src_mailboxes, dst_mailboxes
+
+
+def _all_text_fields(view):
+    out = []
+
+    def walk(c):
+        if isinstance(c, ft.TextField):
+            out.append(c)
+        for ch in getattr(c, "controls", []) or []:
+            walk(ch)
+        content = getattr(c, "content", None)
+        if content is not None and not isinstance(content, str):
+            walk(content)
+
+    for c in getattr(view, "controls", []) or []:
+        walk(c)
+    return out
+
+
+def _fill_bulk(page, src_host, dst_host, accounts):
+    """On the /bulk view: set source+dest host, add rows, fill each account,
+    then click Start all. accounts = [(email, src_pw, dst_pw), ...]."""
+    view = page.views[-1]
+    # add the extra rows (one row exists by default)
+    for _ in range(len(accounts) - 1):
+        assert _click(view, EN("bulk.add_row"))
+    tfs = _all_text_fields(view)
+    hosts = [t for t in tfs if t.label == EN("account.host")]
+    hosts[0].value = src_host
+    hosts[1].value = dst_host
+    emails = [t for t in tfs if t.label == EN("bulk.email")]
+    src_pws = [t for t in tfs if t.label == EN("bulk.src_password")]
+    dst_pws = [t for t in tfs if t.label == EN("bulk.dst_password")]
+    for i, (email, spw, dpw) in enumerate(accounts):
+        emails[i].value = email
+        src_pws[i].value = spw
+        dst_pws[i].value = dpw
+    assert _click(view, EN("bulk.start_all")), "Start-all button not found"
+
+
+def test_bulk_starts_all_accounts(monkeypatch, tmp_path):
+    factory, src_mb, dst_mb = _bulk_factories()
+    monkeypatch.setattr(connection, "IMAPClient", factory)
+
+    page = _run_page()
+    assert _click(page.views[-1], EN("dash.new_bulk")), "New-bulk button not found"
+    assert page.views[-1].route == "/bulk"
+    _fill_bulk(page, "src.test", "dst.test",
+               [("a@x.com", "p1", "p1"), ("b@x.com", "p2", "p2")])
+
+    # both accounts migrate their one message (cap default 2 → both run)
+    assert _wait(lambda: sum(len(mb["INBOX"]) for mb in list(dst_mb.values())) == 2), \
+        "not all bulk accounts migrated"
+    assert dst_mb["a@x.com"]["INBOX"] and dst_mb["b@x.com"]["INBOX"]
+
+
+def test_bulk_cap_one_queues_second(monkeypatch, tmp_path):
+    from email_export_import.gui import prefs
+    prefs.save_pref(tmp_path / "gui.json", "max_active", 1)  # cap = 1
+
+    gate = threading.Event()
+    factory, src_mb, dst_mb = _bulk_factories(gate=gate, gate_email="a@x.com")
+    monkeypatch.setattr(connection, "IMAPClient", factory)
+
+    page = _run_page()
+    assert _click(page.views[-1], EN("dash.new_bulk"))
+    _fill_bulk(page, "src.test", "dst.test",
+               [("a@x.com", "p1", "p1"), ("b@x.com", "p2", "p2")])
+
+    # account 1 connects and blocks in planning; with cap=1 account 2 must NOT
+    # even start connecting (its source never logs in).
+    assert _wait(lambda: "a@x.com" in src_mb), "first account never connected"
+    time.sleep(0.4)
+    assert "b@x.com" not in src_mb, "second account started despite cap=1"
+
+    gate.set()  # release account 1
+    assert _wait(lambda: sum(len(mb["INBOX"]) for mb in list(dst_mb.values())) == 2), \
+        "queued account did not run after the first finished"
+    assert dst_mb["b@x.com"]["INBOX"], "second (queued) account never ran"
+
+
+def _make_completed_session(tmp_path, already_migrated="<old@x>"):
+    s = MigrationState.for_pair("a@x.com", "b@y.com", base_dir=tmp_path)
+    s.set_config({
+        "src": {"host": "src.test", "port": 993, "ssl": True, "verify_ssl": True,
+                "email": "a@x.com"},
+        "dst": {"host": "dst.test", "port": 993, "ssl": True, "verify_ssl": True,
+                "email": "b@y.com"},
+        "skip": [], "workers": 1, "total": 1,
+    })
+    s.mark_migrated("INBOX", already_migrated, 1)
+    s.mark_completed()
+    s.flush()
+    return s
+
+
+def test_sync_a_finished_migration_copies_only_new_mail(monkeypatch, tmp_path):
+    """A finished migration can be re-synced to pick up mail that arrived since.
+    Dedup (by Message-ID) must skip everything already moved and copy ONLY the
+    new messages — no duplicates."""
+    _make_completed_session(tmp_path, already_migrated="<old@x>")
+    dst = FakeIMAPClient(folders={"INBOX": []})
+
+    def factory(host, port=993, ssl=True, **kw):
+        if host == "src.test":
+            # the old (already-migrated) message plus one that arrived since
+            return FakeIMAPClient(folders={"INBOX": [
+                make_message(uid=1, message_id="<old@x>"),
+                make_message(uid=2, message_id="<new@x>"),
+            ]})
+        return dst
+
+    monkeypatch.setattr(connection, "IMAPClient", factory)
+
+    page = _run_page()
+    # the done card offers Sync (not Resume)
+    labels = [lbl for lbl, _ in _clickables(page.views[-1])]
+    assert EN("dash.sync") in labels, "finished migration has no Sync button"
+
+    assert _click(page.views[-1], EN("dash.sync"))
+    fields = _text_fields(page.dialog)
+    fields[0].value = "p"
+    fields[1].value = "p"
+    _click(page.dialog, EN("resume.go"))
+    assert _wait(lambda: page.views and page.views[-1].route == "/plan"), \
+        "sync did not reach the plan screen"
+
+    _click(page.views[-1], EN("plan.start"))
+    assert _wait(lambda: len(dst.folders["INBOX"]) == 1), \
+        "sync copied nothing (or the wrong count)"
+    time.sleep(0.3)  # let any further (wrong) appends land before asserting
+
+    bodies = b"".join(m["body"] for m in dst.folders["INBOX"])
+    assert b"<new@x>" in bodies, "the newly-arrived message was not copied"
+    assert b"<old@x>" not in bodies, "already-migrated message was copied again"
+    assert len(dst.folders["INBOX"]) == 1, "sync duplicated mail"
+
+    # the state is reopened while running, then filed as completed again
+    assert _wait(lambda: MigrationState.for_pair(
+        "a@x.com", "b@y.com", base_dir=tmp_path).status == "completed"), \
+        "synced run was not filed as completed"
+    reloaded = MigrationState.for_pair("a@x.com", "b@y.com", base_dir=tmp_path)
+    assert reloaded.is_migrated("INBOX", "<new@x>", 2), \
+        "the new message was not recorded — a second sync would copy it again"
+
+
+def test_resume_shows_loading_overlay_until_plan_appears(monkeypatch, tmp_path):
+    """Reconnect + folder listing can take many seconds on a slow/rate-limiting
+    server. Without feedback the app looks frozen ('screen just sat there'), so
+    a dimmed spinner layer must cover the wait and clear once the plan renders."""
+    _make_paused_session(tmp_path)
+    gate = threading.Event()
+
+    def factory(host, port=993, ssl=True, **kw):
+        if host == "src.test":
+            c = FakeIMAPClient(
+                folders={"INBOX": [make_message(uid=1, message_id="<m1@x>")]}
+            )
+            orig = c.list_folders
+            c.list_folders = lambda: (gate.wait(timeout=5), orig())[1]  # stall planning
+            return c
+        return FakeIMAPClient(folders={"INBOX": []})
+
+    monkeypatch.setattr(connection, "IMAPClient", factory)
+
+    page = _run_page()
+    overlay = page.overlay[0]
+    assert overlay.visible is False, "spinner must start hidden"
+
+    assert _click(page.views[-1], EN("dash.resume"))
+    fields = _text_fields(page.dialog)
+    fields[0].value = "p"
+    fields[1].value = "p"
+    _click(page.dialog, EN("resume.go"))
+
+    assert _wait(lambda: overlay.visible is True), \
+        "no loading overlay while resume reconnects — the app looks frozen"
+
+    gate.set()
+    assert _wait(lambda: page.views and page.views[-1].route == "/plan")
+    assert overlay.visible is False, "loading overlay not cleared once the plan rendered"
+
+
 def test_resume_success_starts_the_run(monkeypatch, tmp_path):
     _make_paused_session(tmp_path)
     dst = FakeIMAPClient(folders={"INBOX": []})
@@ -186,15 +473,15 @@ def test_resume_success_starts_the_run(monkeypatch, tmp_path):
     assert len(fields) == 2
     fields[0].value = "srcpw"
     fields[1].value = "dstpw"
-    calls_before = len(page.run_thread_calls)
+    calls_before = len(page.run_task_calls)
     assert _click(page.dialog, EN("resume.go")), "resume-go button not found in dialog"
 
     # Resume now routes through the plan screen (folder selection before
-    # transfer). It appears via a callback marshalled onto the page thread.
+    # transfer). It appears via a callback marshalled onto the event loop.
     assert _wait(lambda: page.views and page.views[-1].route == "/plan"), \
         "plan screen did not appear after Resume — callback not marshalled/rendered"
-    assert len(page.run_thread_calls) > calls_before, \
-        "resume callback was not marshalled onto the page thread (UI would not render)"
+    assert len(page.run_task_calls) > calls_before, \
+        "resume callback was not marshalled onto the event loop (UI would not render)"
 
     # Starting from the plan screen migrates all 3 messages.
     assert _click(page.views[-1], EN("plan.start")), "Start button not found on plan screen"
@@ -367,6 +654,8 @@ def test_resume_connection_failure_is_visible(monkeypatch, tmp_path):
     assert _wait(lambda: page.dialog is not None
                  and EN("status.error") in _dialog_title(page.dialog)), \
         "resume failure was invisible — no error surfaced to the user"
+    # …and a failed transition must never leave the spinner stuck on screen.
+    assert page.overlay[0].visible is False, "loading overlay stuck after a failure"
 
 
 def _dialog_title(dlg):

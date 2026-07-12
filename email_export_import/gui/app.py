@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import time
+import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -9,6 +9,7 @@ import flet as ft
 from .. import __version__
 from ..models import Account
 from ..state import MigrationState
+from . import prefs
 from . import updater
 from . import views
 from .async_ops import run_async
@@ -42,13 +43,35 @@ def _page_main(page: ft.Page) -> None:
     i18n = I18n()
     controller = Controller()
     manager = RunManager()
+    _prefs = prefs.load_prefs(i18n._prefs_path)
+    manager.max_active = _prefs.get("max_active", 2)
+    manager.workers = _prefs.get("workers", 4)
     manager.load_resumable()
     manager.load_completed()  # keep finished migrations visible as done cards
     ws = WizardState()
     highlight: list[str | None] = [None]
+    # Bulk coordinator: pending (src, dst, preset_key) specs waiting for a slot,
+    # and the keys whose connect+plan is currently in flight (counted against
+    # the cap so no more than max_active logins happen at once).
+    bulk_pending: list[tuple] = []
+    bulk_starting: set[str] = set()
     page.title = i18n.t("app.title")
     page.window.width = 820
     page.window.height = 680
+
+    # Buttons don't get a pointer cursor by default here, so hovering a live
+    # button feels identical to hovering dead text — the UI reads as broken.
+    # Set the hand cursor once, app-wide, for every button variant.
+    def _cursor_style() -> ft.ButtonStyle:
+        return ft.ButtonStyle(mouse_cursor=ft.MouseCursor.CLICK)
+
+    page.theme = ft.Theme(
+        filled_button_theme=ft.FilledButtonTheme(style=_cursor_style()),
+        text_button_theme=ft.TextButtonTheme(style=_cursor_style()),
+        outlined_button_theme=ft.OutlinedButtonTheme(style=_cursor_style()),
+        icon_button_theme=ft.IconButtonTheme(style=_cursor_style()),
+        button_theme=ft.ButtonTheme(style=_cursor_style()),
+    )
 
     def safe_update(control) -> None:
         try:
@@ -56,22 +79,67 @@ def _page_main(page: ft.Page) -> None:
         except RuntimeError:
             pass  # page closed / control unmounted
 
-    def ui(fn):
-        """Marshal a callback onto the Flet page thread.
+    # Blocking-work indicator: a dimmed full-page layer with a centred spinner.
+    # Connecting/planning against a rate-limiting server can take many seconds
+    # (login backoff), and without this the app just looks frozen.
+    loading_layer = ft.Container(
+        expand=True,
+        bgcolor=ft.Colors.with_opacity(0.45, ft.Colors.BLACK),
+        alignment=ft.Alignment.CENTER,
+        visible=False,
+        content=ft.Column(
+            [
+                ft.ProgressRing(width=48, height=48),
+                ft.Text("", size=13, color=ft.Colors.WHITE),
+            ],
+            alignment=ft.MainAxisAlignment.CENTER,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=14,
+            tight=True,
+        ),
+    )
+    loading_text = loading_layer.content.controls[1]
+    page.overlay.append(loading_layer)
 
-        run_async delivers its result on a bare worker thread that lacks the
-        page context Flet needs for UI updates to render (page.run_thread sets
-        that context and hops onto the event loop; a raw thread does not). Every
-        run_async callback that touches the UI must go through here or its
-        dialogs / view changes silently never render.
+    def show_loading(on: bool, message: str = "") -> None:
+        loading_text.value = message
+        loading_layer.visible = on
+        safe_update(loading_layer)
+
+    def ui(fn):
+        """Marshal a callback onto the Flet *event loop* thread.
+
+        Flet 0.85's control.update()/page.update() run the diff engine (mutating
+        shared session state) and enqueue frames on a loop-bound asyncio.Queue
+        with no thread marshalling — they are race-free ONLY on the event-loop
+        thread. run_async delivers its result on a bare worker thread, and
+        page.run_thread would hop to the executor (still off-loop): mutating the
+        UI from either races the loop's own click handling and desyncs the
+        client, leaving buttons that render but no longer respond.
+
+        run_task run_coroutine_threadsafe's the wrapped callback ONTO the loop —
+        the one place UI mutation is safe. Every run_async callback that touches
+        the UI must go through here.
         """
-        return lambda *a, **k: page.run_thread(fn, *a, **k)
+
+        async def _on_loop(*a, **k):
+            fn(*a, **k)
+
+        return lambda *a, **k: page.run_task(_on_loop, *a, **k)
 
     # ---- dashboard ------------------------------------------------------
 
     def set_locale(locale: str) -> None:
         i18n.set_locale(locale)
         show_settings()  # stay on settings, re-rendered in the new language
+
+    def set_max_active(n: int) -> None:
+        manager.max_active = n
+        prefs.save_pref(i18n._prefs_path, "max_active", n)
+
+    def set_workers(n: int) -> None:
+        manager.workers = n
+        prefs.save_pref(i18n._prefs_path, "workers", n)
 
     def show_settings() -> None:
         from ..state import DEFAULT_BASE_DIR
@@ -82,6 +150,8 @@ def _page_main(page: ft.Page) -> None:
                 i18n, str(DEFAULT_BASE_DIR), on_locale=set_locale,
                 on_back=show_dashboard, version=__version__,
                 on_check_update=lambda: _check_updates(manual=True),
+                max_active=manager.max_active, on_max_active=set_max_active,
+                workers=manager.workers, on_workers=set_workers,
             )
         )
         page.update()
@@ -105,7 +175,8 @@ def _page_main(page: ft.Page) -> None:
             i18n, snaps,
             on_new=start_wizard, on_pause=do_pause, on_resume=ask_resume,
             on_cancel=do_cancel, on_detail=show_detail, on_dismiss=do_dismiss,
-            on_settings=show_settings, highlight_key=hk, refs=refs,
+            on_settings=show_settings, on_new_bulk=show_bulk,
+            highlight_key=hk, refs=refs,
         )
         render["dash_refs"] = refs
         render["dash_sig"] = views.dashboard_signature(snaps)
@@ -155,6 +226,9 @@ def _page_main(page: ft.Page) -> None:
 
         def submit(src_pw: str, dst_pw: str) -> None:
             page.pop_dialog()
+            # Reconnecting + reading folders can take a while on a slow or
+            # rate-limiting server — show the spinner so it never looks frozen.
+            show_loading(True, i18n.t("account.testing"))
             run_async(
                 lambda: _reconnect_and_build(cfg, src_pw, dst_pw),
                 on_done=ui(lambda built: _start_resumed(key, run, cfg, built)),
@@ -191,6 +265,7 @@ def _page_main(page: ft.Page) -> None:
         # Resume routes through the plan screen so the user can choose which
         # folders to transfer (and adjust workers/spool) right before starting.
         nonlocal ws
+        show_loading(False)
         src_conn, dst_conn, plan = built
         ws = WizardState()
         ws.src_account = src_conn.account
@@ -199,7 +274,11 @@ def _page_main(page: ft.Page) -> None:
         ws.dst_conn = dst_conn
         ws.plan = plan
         ws.skip = set(cfg.get("skip", []))
-        ws.workers = cfg.get("workers", manager.default_workers())
+        # Deliberately NOT cfg["workers"]: that records what the run used last
+        # time. The current setting is the user's live "how hard to push" knob —
+        # lowering it must actually take effect on resume (they can still
+        # override per-run on the plan screen).
+        ws.workers = manager.default_workers()
         ws.spool = cfg.get("spool", False)
         ws.resume_state = old_run.state
         ws.resume_key = key
@@ -216,6 +295,7 @@ def _page_main(page: ft.Page) -> None:
         )
 
     def _show_error(message: str) -> None:
+        show_loading(False)  # any failed transition must drop the spinner
         page.show_dialog(
             ft.AlertDialog(title=ft.Text(i18n.t("status.error")), content=ft.Text(message))
         )
@@ -334,10 +414,15 @@ def _page_main(page: ft.Page) -> None:
 
     # ---- background poll ------------------------------------------------
 
-    def poll() -> None:
+    async def poll() -> None:
+        # Runs on the event loop (page.run_task), so every control.update() /
+        # page.update() below happens on the one thread where Flet's patch
+        # machinery is race-free. A background executor thread here would fight
+        # the loop's click handling and desync the client (dead buttons).
         while True:
-            time.sleep(0.2)
+            await asyncio.sleep(0.2)
             try:
+                pump_bulk()  # start queued bulk accounts as slots free (on-loop)
                 if not page.views:
                     continue
                 route = page.views[-1].route
@@ -397,6 +482,7 @@ def _page_main(page: ft.Page) -> None:
             status.value = i18n.t("account.testing")
             safe_update(status)
             handles["set_busy"](True)
+            show_loading(True, i18n.t("account.testing"))
             run_async(
                 lambda: controller.test_connection(account),
                 on_done=ui(lambda result: _test_done(account, result)),
@@ -404,6 +490,7 @@ def _page_main(page: ft.Page) -> None:
             )
 
         def _test_done(account: Account, result, exc: Exception | None = None) -> None:
+            show_loading(False)
             handles["set_busy"](False)
             if exc is not None:
                 status.value = str(exc)
@@ -455,9 +542,11 @@ def _page_main(page: ft.Page) -> None:
         ws.workers = manager.default_workers()
 
         def plan_ready(plan) -> None:
+            show_loading(False)
             ws.plan = plan
             _render_plan()
 
+        show_loading(True, i18n.t("loading.plan"))
         run_async(
             lambda: controller.build_plan(ws.src_conn, ws.dst_conn, ws.skip),
             on_done=ui(plan_ready),
@@ -512,8 +601,95 @@ def _page_main(page: ft.Page) -> None:
         highlight[0] = key
         back_to_dashboard()
 
+    # ---- bulk ----------------------------------------------------------
+
+    def show_bulk() -> None:
+        view, _handles = views.build_bulk(i18n, on_start=start_bulk, on_back=back_to_dashboard)
+        page.views.clear()
+        page.views.append(view)
+        page.update()
+
+    def start_bulk(pairs: list, preset_key: str | None) -> None:
+        # Add a queued placeholder card per account immediately, then let the
+        # poll pump them onto real runs as slots free (cap = manager.max_active).
+        for src, dst in pairs:
+            key = f"{src.email}__{dst.email}"
+            existing = manager.get(key)
+            if existing is not None and existing.is_active:
+                highlight[0] = key
+                continue  # already running for this pair — skip the duplicate
+            state = MigrationState.for_pair(src.email, dst.email, base_dir=manager.state_dir)
+            placeholder = Run(
+                key=key, title=f"{src.email} → {dst.email}",
+                src_conn=None, dst_conn=None, plans=None, state=state,
+                workers=manager.default_workers(), total=0,
+            )
+            manager.add(placeholder)
+            bulk_pending.append((src, dst, preset_key))
+        back_to_dashboard()
+
+    def pump_bulk() -> None:
+        # Runs on the event loop (called from poll). Start connects until the
+        # cap (active runs + in-flight connects) is reached.
+        while (
+            manager.active_count() + len(bulk_starting) < manager.max_active
+            and bulk_pending
+        ):
+            src, dst, preset_key = bulk_pending.pop(0)
+            key = f"{src.email}__{dst.email}"
+            bulk_starting.add(key)
+            run_async(
+                lambda s=src, d=dst, pk=preset_key: _bulk_connect(s, d, pk),
+                on_done=ui(lambda built, k=key: _bulk_started(k, built)),
+                on_error=ui(lambda exc, k=key: _bulk_failed(k, str(exc))),
+            )
+
+    def _bulk_connect(src, dst, preset_key):
+        src_result = controller.test_connection(src)
+        if not src_result.ok:
+            raise RuntimeError(src_result.message or "source connection failed")
+        try:
+            dst_result = controller.test_connection(dst)
+            if not dst_result.ok:
+                raise RuntimeError(dst_result.message or "destination connection failed")
+            try:
+                skip = controller.default_skip(preset_key)
+                plan = controller.build_plan(src_result.conn, dst_result.conn, skip)
+            except Exception:
+                dst_result.conn.close()
+                raise
+        except Exception:
+            src_result.conn.close()
+            raise
+        return src_result.conn, dst_result.conn, plan, skip
+
+    def _bulk_started(key: str, built) -> None:
+        bulk_starting.discard(key)
+        src_conn, dst_conn, plan, skip = built
+        active_plans = [p for p in plan.plans if p.source not in skip]
+        total = sum(plan.counts.get(p.source, 0) for p in active_plans)
+        run = Run(
+            key=key, title=f"{src_conn.account.email} → {dst_conn.account.email}",
+            src_conn=src_conn, dst_conn=dst_conn, plans=active_plans,
+            state=MigrationState.for_pair(
+                src_conn.account.email, dst_conn.account.email, base_dir=manager.state_dir
+            ),
+            workers=manager.default_workers(), total=total, skip=set(skip),
+        )
+        manager.add(run)  # replaces the queued placeholder
+        run.start()
+        highlight[0] = key
+        refresh_current()
+
+    def _bulk_failed(key: str, message: str) -> None:
+        bulk_starting.discard(key)
+        run = manager.get(key)
+        if run is not None:
+            run.mark_failed(message)
+        refresh_current()
+
     show_dashboard()
-    page.run_thread(poll)
+    page.run_task(poll)
     _check_updates(manual=False)
 
 
