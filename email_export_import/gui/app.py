@@ -10,6 +10,7 @@ from .. import __version__
 from ..models import Account
 from ..state import MigrationState
 from . import prefs
+from . import sysinfo
 from . import updater
 from . import views
 from .async_ops import run_async
@@ -46,6 +47,7 @@ def _page_main(page: ft.Page) -> None:
     _prefs = prefs.load_prefs(i18n._prefs_path)
     manager.max_active = _prefs.get("max_active", 2)
     manager.workers = _prefs.get("workers", 4)
+    manager.rate_limit = _prefs.get("rate_limit", 0)
     manager.load_resumable()
     manager.load_completed()  # keep finished migrations visible as done cards
     ws = WizardState()
@@ -141,6 +143,19 @@ def _page_main(page: ft.Page) -> None:
         manager.workers = n
         prefs.save_pref(i18n._prefs_path, "workers", n)
 
+    def set_rate_limit(n: int) -> None:
+        manager.rate_limit = n
+        prefs.save_pref(i18n._prefs_path, "rate_limit", n)
+
+    def safe_mode() -> None:
+        """One click to the gentlest settings: a single connection, one run at a
+        time, and a paced upload. For machines whose network stack falls over
+        under sustained bulk transfer."""
+        set_workers(1)
+        set_max_active(1)
+        set_rate_limit(2 * 1024 * 1024)
+        show_settings()  # re-render so the dropdowns show the new values
+
     def show_settings() -> None:
         from ..state import DEFAULT_BASE_DIR
 
@@ -152,6 +167,8 @@ def _page_main(page: ft.Page) -> None:
                 on_check_update=lambda: _check_updates(manual=True),
                 max_active=manager.max_active, on_max_active=set_max_active,
                 workers=manager.workers, on_workers=set_workers,
+                rate_limit=manager.rate_limit, on_rate_limit=set_rate_limit,
+                on_safe_mode=safe_mode, tso_on=sysinfo.tso_enabled(),
             )
         )
         page.update()
@@ -594,7 +611,7 @@ def _page_main(page: ft.Page) -> None:
             key=key, title=title,
             src_conn=ws.src_conn, dst_conn=ws.dst_conn, plans=active_plans,
             state=state, workers=ws.workers, total=total, skip=ws.skip,
-            spool_enabled=ws.spool,
+            spool_enabled=ws.spool, rate_limit=manager.rate_limit,
         )
         manager.add(run)
         run.start()
@@ -675,6 +692,7 @@ def _page_main(page: ft.Page) -> None:
                 src_conn.account.email, dst_conn.account.email, base_dir=manager.state_dir
             ),
             workers=manager.default_workers(), total=total, skip=set(skip),
+            rate_limit=manager.rate_limit,
         )
         manager.add(run)  # replaces the queued placeholder
         run.start()

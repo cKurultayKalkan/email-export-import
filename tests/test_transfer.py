@@ -493,3 +493,43 @@ def test_uidvalidity_bump_forces_a_full_rescan(monkeypatch, tmp_path):
     assert sorted(set(src.fetched_uids)) == [1, 2]
     assert progress.migrated == 0 and progress.skipped == 2
     assert dst.folders["INBOX"] == [], "UIDVALIDITY bump caused duplicate mail"
+
+
+def test_throttle_paces_uploads(monkeypatch, tmp_path):
+    """The rate limit must actually gate the APPEND path (the write that hits
+    the network hardest), and account for each message's real size."""
+    from email_export_import.throttle import RateLimiter
+
+    msgs = [make_message(uid=i, message_id=f"<m{i}@x>") for i in (1, 2, 3)]
+    src = FakeIMAPClient(folders={"INBOX": msgs})
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    src_conn, dst_conn = make_conns(monkeypatch, src, dst)
+    state = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+    plans = [FolderPlan(source="INBOX", dest="INBOX", create=False)]
+
+    asked: list[int] = []
+
+    class Recorder(RateLimiter):
+        def acquire(self, n_bytes, cancel=None):
+            asked.append(n_bytes)
+
+    progress = migrate(
+        src_conn, dst_conn, plans, state, workers=1, throttle=Recorder(1000)
+    )
+
+    assert progress.migrated == 3
+    assert len(asked) == 3, "throttle was not consulted for every upload"
+    # each request equals that message's real body size
+    assert asked == [len(m["body"]) for m in msgs]
+
+
+def test_no_throttle_by_default(monkeypatch, tmp_path):
+    msgs = [make_message(uid=1, message_id="<m1@x>")]
+    src = FakeIMAPClient(folders={"INBOX": msgs})
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    src_conn, dst_conn = make_conns(monkeypatch, src, dst)
+    state = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+    plans = [FolderPlan(source="INBOX", dest="INBOX", create=False)]
+
+    progress = migrate(src_conn, dst_conn, plans, state)  # no throttle arg
+    assert progress.migrated == 1  # unlimited path still works

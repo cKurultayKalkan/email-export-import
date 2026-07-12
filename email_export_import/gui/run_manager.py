@@ -11,6 +11,7 @@ from ..errors import QuotaExceeded
 from ..models import FolderPlan, TransferProgress
 from ..spool import MessageSpool
 from ..state import MigrationState
+from ..throttle import RateLimiter
 from ..transfer import migrate
 
 
@@ -45,6 +46,7 @@ class Run:
         skip: set[str] | None = None,
         spool_enabled: bool = False,
         state_dir: Path | None = None,
+        rate_limit: int = 0,
     ) -> None:
         self.key = key
         self.title = title
@@ -56,6 +58,8 @@ class Run:
         self._skip = skip or set()
         self._spool_enabled = spool_enabled
         self._state_dir = state_dir
+        # Bytes/sec ceiling on uploads; 0 = unlimited.
+        self._rate_limit = rate_limit
 
         self._lock = threading.Lock()
         self._cancel = threading.Event()
@@ -148,6 +152,9 @@ class Run:
                     self._src_conn, self._dst_conn, self._plans, self._state,
                     on_message=on_message, workers=self._workers,
                     cancel=self._cancel, spool=spool,
+                    throttle=(
+                        RateLimiter(self._rate_limit) if self._rate_limit > 0 else None
+                    ),
                 )
             except QuotaExceeded as exc:
                 error = ("quota", str(exc))
@@ -249,7 +256,11 @@ class RunManager:
     """Keyed collection of Runs backing the dashboard."""
 
     def __init__(
-        self, state_dir: Path | None = None, max_active: int = 2, workers: int = 4
+        self,
+        state_dir: Path | None = None,
+        max_active: int = 2,
+        workers: int = 4,
+        rate_limit: int = 0,
     ) -> None:
         self.state_dir = state_dir
         # Cap on simultaneously-active bulk runs (protects a rate-limiting
@@ -259,6 +270,10 @@ class RunManager:
         # concurrent TCP writes — worth doing on a machine whose network stack
         # falls over under bulk upload.
         self.workers = workers
+        # Bytes/sec ceiling on uploads (0 = unlimited). Sustained bulk TCP writes
+        # are what stress a machine's network send path — not CPU or RAM — so
+        # this is the knob that actually bounds that pressure.
+        self.rate_limit = rate_limit
         self._runs: dict[str, Run] = {}
         self._lock = threading.Lock()
 

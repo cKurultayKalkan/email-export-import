@@ -10,6 +10,7 @@ from .errors import QuotaExceeded
 from .models import FolderPlan, TransferProgress
 from .spool import MessageSpool
 from .state import MigrationState
+from .throttle import RateLimiter
 
 # Flags copied to the destination. \Recent is server-managed (RFC 3501) and
 # must never be set by a client.
@@ -123,6 +124,7 @@ def _process_unit(
     stop: threading.Event,
     on_message: MessageCallback | None,
     spool: MessageSpool | None = None,
+    throttle: RateLimiter | None = None,
 ) -> None:
     """Migrate one chunk of UIDs. State and progress mutations are guarded by
     *lock*; network transfers run outside it so workers overlap on the wire."""
@@ -169,6 +171,9 @@ def _process_unit(
                 internaldate = m.get(b"INTERNALDATE")
                 if spool is not None:
                     spool.put(plan.source, uid, message_id, body, flags, internaldate)
+            if throttle is not None:
+                # Pace the upload: this is the write that hits the network hardest.
+                throttle.acquire(len(body), cancel=stop)
             try:
                 dst.with_retry(
                     lambda c: c.append(plan.dest, body, flags=flags, msg_time=internaldate)
@@ -213,6 +218,7 @@ def migrate(
     workers: int = 1,
     cancel: threading.Event | None = None,
     spool: MessageSpool | None = None,
+    throttle: RateLimiter | None = None,
 ) -> TransferProgress:
     progress = TransferProgress()
     lock = threading.Lock()
@@ -228,7 +234,10 @@ def migrate(
 
         if workers <= 1:
             for plan, uids in units:
-                _process_unit(src, dst, plan, uids, state, progress, lock, stop, on_message, spool)
+                _process_unit(
+                    src, dst, plan, uids, state, progress, lock, stop, on_message,
+                    spool, throttle,
+                )
             return progress
 
         # Each worker owns a private connection pair (IMAP sessions are not
@@ -250,7 +259,8 @@ def migrate(
                     except queue.Empty:
                         return
                     _process_unit(
-                        wsrc, wdst, plan, uids, state, progress, lock, stop, on_message, spool
+                        wsrc, wdst, plan, uids, state, progress, lock, stop, on_message,
+                        spool, throttle,
                     )
             except Exception as exc:
                 stop.set()

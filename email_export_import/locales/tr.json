@@ -111,5 +111,13 @@
   "settings.max_active": "En fazla eşzamanlı taşıma",
   "settings.max_active_note": "Toplu taşımalar aynı anda en fazla bu kadar çalışır; geri kalanı sırada bekler. Sunucunuz çok fazla oturum açmayı reddediyorsa düşürün.",
   "settings.workers": "Taşıma başına paralel bağlantı",
-  "settings.workers_note": "Bir taşımanın aynı anda kaç mesaj taşıyacağı. Düşük değer daha yavaştır ama ağa ve sunucuya daha nazik davranır."
+  "settings.workers_note": "Bir taşımanın aynı anda kaç mesaj taşıyacağı. Düşük değer daha yavaştır ama ağa ve sunucuya daha nazik davranır.",
+  "settings.load_title": "Aktarım yükü",
+  "settings.rate_limit": "Aktarım hızı sınırı",
+  "settings.rate_unlimited": "Sınırsız",
+  "settings.rate_limit_note": "Mesajların ne hızla yükleneceğini sınırlar. Bir makinenin ağ yığınını zorlayan şey, kesintisiz tam hızda aktarımdır — aktarım sırasında sisteminiz kararsızlaşıyorsa bunu düşürün.",
+  "settings.safe_mode": "Güvenli mod",
+  "settings.safe_mode_note": "Tek bağlantı, aynı anda tek taşıma, 2 MB/s. En yavaş ama en nazik.",
+  "settings.tso_title": "macOS ağ hızlandırması (TSO) açık",
+  "settings.tso_body": "Mac'iniz, veriyi parçalara bölme işini ağ kartına devrediyor (TSO). Bu açıkken kesintisiz büyük yükleme yapmanın macOS çekirdeğini çökerttiği görüldü. Kapatmak biraz hız kaybettirir ve yeniden başlatınca geri gelir. Terminal'de çalıştırın:"
 }

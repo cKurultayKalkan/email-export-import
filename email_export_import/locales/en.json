@@ -111,5 +111,13 @@
   "settings.max_active": "Max simultaneous transfers",
   "settings.max_active_note": "Bulk migrations run at most this many at once; the rest wait in a queue. Lower this if your server rejects too many logins.",
   "settings.workers": "Parallel connections per transfer",
-  "settings.workers_note": "How many messages a transfer moves at once. Lower is slower but gentler on the network and the server."
+  "settings.workers_note": "How many messages a transfer moves at once. Lower is slower but gentler on the network and the server.",
+  "settings.load_title": "Transfer load",
+  "settings.rate_limit": "Transfer speed limit",
+  "settings.rate_unlimited": "Unlimited",
+  "settings.rate_limit_note": "Caps how fast messages are uploaded. Sustained full-speed transfer is what stresses a machine's network stack — lower this if transfers make your system unstable.",
+  "settings.safe_mode": "Safe mode",
+  "settings.safe_mode_note": "One connection, one transfer at a time, 2 MB/s. Slowest but gentlest.",
+  "settings.tso_title": "macOS network offload is on",
+  "settings.tso_body": "Your Mac hands oversized blocks to the network card to split up (TSO). Sustained bulk upload with this enabled has been seen crashing the macOS kernel. Turning it off costs a little speed and reverts on reboot. Run in Terminal:"
 }

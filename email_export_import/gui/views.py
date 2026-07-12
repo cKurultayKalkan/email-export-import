@@ -6,6 +6,7 @@ import flet as ft
 
 from ..models import Account
 from ..providers import list_presets
+from . import sysinfo
 from .controller import PlanResult
 from .i18n import I18n
 from .run_manager import RunSnapshot
@@ -35,6 +36,10 @@ def build_settings(
     on_max_active: Callable[[int], None] | None = None,
     workers: int = 4,
     on_workers: Callable[[int], None] | None = None,
+    rate_limit: int = 0,
+    on_rate_limit: Callable[[int], None] | None = None,
+    on_safe_mode: Callable[[], None] | None = None,
+    tso_on: bool | None = None,
 ) -> ft.View:
     language = ft.Dropdown(
         label=i18n.t("settings.language"),
@@ -60,13 +65,66 @@ def build_settings(
         options=[ft.dropdown.Option(str(n)) for n in (1, 2, 4, 8)],
         on_select=lambda e: on_workers(int(e.control.value)) if on_workers else None,
     )
+    rate_dd = ft.Dropdown(
+        label=i18n.t("settings.rate_limit"),
+        value=str(rate_limit),
+        width=280,
+        options=[ft.dropdown.Option("0", i18n.t("settings.rate_unlimited"))]
+        + [
+            ft.dropdown.Option(str(mb * 1024 * 1024), f"{mb} MB/s")
+            for mb in (10, 5, 2, 1)
+        ],
+        on_select=lambda e: on_rate_limit(int(e.control.value)) if on_rate_limit else None,
+    )
     controls: list[ft.Control] = [
         ft.Text(i18n.t("settings.title"), size=20, weight=ft.FontWeight.BOLD),
         language,
+        ft.Divider(),
+        ft.Text(i18n.t("settings.load_title"), weight=ft.FontWeight.BOLD, size=13),
         concurrency,
         ft.Text(i18n.t("settings.max_active_note"), size=12),
         workers_dd,
         ft.Text(i18n.t("settings.workers_note"), size=12),
+        rate_dd,
+        ft.Text(i18n.t("settings.rate_limit_note"), size=12),
+        ft.Row(
+            [
+                ft.OutlinedButton(
+                    i18n.t("settings.safe_mode"),
+                    icon=ft.Icons.SHIELD_OUTLINED,
+                    on_click=lambda e: on_safe_mode() if on_safe_mode else None,
+                ),
+                ft.Text(i18n.t("settings.safe_mode_note"), size=12, expand=True),
+            ]
+        ),
+    ]
+    if tso_on:
+        # Only shown when we positively read TSO=1 on macOS. Sustained bulk
+        # upload with TSO on has been seen panicking the kernel's send path.
+        controls.append(
+            ft.Container(
+                bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.AMBER),
+                border_radius=6,
+                padding=10,
+                content=ft.Column(
+                    [
+                        ft.Row(
+                            [
+                                ft.Icon(ft.Icons.WARNING_AMBER, color=ft.Colors.AMBER),
+                                ft.Text(i18n.t("settings.tso_title"),
+                                        weight=ft.FontWeight.BOLD, size=13, expand=True),
+                            ],
+                            spacing=8,
+                        ),
+                        ft.Text(i18n.t("settings.tso_body"), size=12),
+                        ft.Text(sysinfo.TSO_DISABLE_COMMAND, size=12,
+                                selectable=True, font_family="monospace"),
+                    ],
+                    spacing=6,
+                ),
+            )
+        )
+    controls += [
         ft.Divider(),
         ft.Text(f"{i18n.t('settings.version')}: {version}", size=13),
         ft.TextButton(
