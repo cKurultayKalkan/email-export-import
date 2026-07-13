@@ -1,9 +1,31 @@
-# Email Export - Import Tool - CLI & Desktop
+<div align="center">
 
-Move a whole mailbox from one IMAP server to another — **folders, read/starred
-flags, original dates, and attachments preserved** — from a command line or a
-desktop app. Interruptible and resumable: run it again and it continues where it
-stopped, without re-copying what already landed.
+<img src="assets/icon.png" alt="Email Export Import Tool icon" width="128">
+
+# Email Export Import Tool
+
+**Move a whole mailbox from one IMAP server to another — folders, read/starred
+flags, original dates, and attachments preserved.**
+
+[![Latest release](https://img.shields.io/github/v/release/cKurultayKalkan/email-export-import?label=release)](https://github.com/cKurultayKalkan/email-export-import/releases/latest)
+[![Build](https://img.shields.io/github/actions/workflow/status/cKurultayKalkan/email-export-import/build-gui.yml?label=build)](https://github.com/cKurultayKalkan/email-export-import/actions/workflows/build-gui.yml)
+[![Downloads](https://img.shields.io/github/downloads/cKurultayKalkan/email-export-import/total)](https://github.com/cKurultayKalkan/email-export-import/releases)
+![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+
+[**⬇ Download the app**](#download-the-app-no-coding-required) ·
+[Documentation](#contents) ·
+[Changelog](CHANGELOG.md) ·
+[Report a bug](https://github.com/cKurultayKalkan/email-export-import/issues/new) ·
+[Request a feature](https://github.com/cKurultayKalkan/email-export-import/issues/new)
+
+</div>
+
+---
+
+A desktop app for everyone, and a scriptable CLI for developers. Interruptible
+and resumable: run it again and it continues where it stopped, without
+re-copying what already landed.
 
 Built for real migrations: large mailboxes, rate-limiting servers, self-signed
 certificates, and providers that hide their quirks (Gmail label folders,
@@ -27,8 +49,9 @@ Courier/`INBOX.` namespaces, app-password-only logins).
 
 ## Contents
 
-- [Install](#install)
-- [Quick start](#quick-start)
+- [Download the app (no coding required)](#download-the-app-no-coding-required)
+- [Install from source (developers)](#install-from-source-developers)
+- [Quick start (CLI)](#quick-start-cli)
 - [Desktop app](#desktop-app)
 - [What gets preserved](#what-gets-preserved)
 - [Resume & safety](#resume--safety)
@@ -40,19 +63,68 @@ Courier/`INBOX.` namespaces, app-password-only logins).
 
 ---
 
-## Install
+## Download the app (no coding required)
 
-Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+Every release ships a ready-to-run desktop app for macOS, Windows, and Linux —
+no Python, no terminal, nothing to install first.
+
+**[⬇ Go to the latest release](https://github.com/cKurultayKalkan/email-export-import/releases/latest)**
+and download the file for your system:
+
+| Your system | Download | Then |
+|---|---|---|
+| **macOS** | `email-export-import-macos.zip` | Unzip, drag `email-export-import.app` into **Applications**, open it |
+| **Windows** | `email-export-import-windows.zip` | Unzip the **whole folder**, then double-click `email-export-import.exe` inside it |
+| **Linux** | `email-export-import-linux.zip` | Unzip, run the `email-export-import` executable inside |
+
+**First launch — the "unknown developer" warning.** The bundles are not
+code-signed yet, so your OS will warn you once:
+
+- **macOS**: right-click the app → **Open** → **Open**. If macOS still blocks
+  it ("cannot be opened" / "damaged"), open **System Settings → Privacy &
+  Security** and click **Open Anyway**, or clear the quarantine flag in
+  Terminal:
+
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/email-export-import.app
+  ```
+
+- **Windows**: SmartScreen shows "Windows protected your PC" — click
+  **More info → Run anyway**.
+- **Linux**: no warning; if the file isn't executable, `chmod +x` it. Requires
+  GTK 3 (preinstalled on most desktops).
+
+**Verify your download (optional).** Each release includes `SHA256SUMS.txt`;
+compare with `shasum -a 256 <file>` (macOS/Linux) or
+`certutil -hashfile <file> SHA256` (Windows).
+
+**Updates are automatic.** The app checks GitHub Releases on demand
+(Settings → Check for updates), downloads over HTTPS, and verifies the
+checksum before offering to update — you never have to come back here.
+
+## Install from source (developers)
+
+Requires [git](https://git-scm.com/), Python 3.11+, and
+[uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`).
 
 ```bash
+git clone https://github.com/cKurultayKalkan/email-export-import.git
+cd email-export-import
+
 uv sync                # CLI only
 uv sync --extra gui    # CLI + desktop app (adds Flet)
 ```
 
-Two console scripts are installed: `email-export-import` (CLI) and
-`email-export-import-gui` (desktop).
+Two console scripts are installed into the project venv:
+`email-export-import` (CLI) and `email-export-import-gui` (desktop). Run them
+with `uv run`:
 
-## Quick start
+```bash
+uv run email-export-import        # CLI wizard
+uv run email-export-import-gui    # desktop app
+```
+
+## Quick start (CLI)
 
 ### Interactive CLI wizard
 
@@ -83,6 +155,9 @@ Useful flags: `--src-preset/--dst-preset`, `--src-host/--dst-host`,
 `--state-dir PATH`, `--yes`. Run `--help` for the full list.
 
 ## Desktop app
+
+[Download it packaged](#download-the-app-no-coding-required) for your OS, or
+run it from source:
 
 ```bash
 uv sync --extra gui
@@ -117,8 +192,9 @@ The desktop app is a **dashboard of migrations**, not a one-shot wizard:
 The desktop app reads and writes the **same state files as the CLI**, so the two
 are interchangeable mid-migration.
 
-> Packaged desktop bundles (dmg / exe / AppImage) are built unsigned by CI on
-> tag pushes; signing/notarization is a separate release step.
+> Packaged bundles are built unsigned by CI on every tag push and attached to
+> the [release](https://github.com/cKurultayKalkan/email-export-import/releases);
+> signing/notarization is a separate release step.
 
 ## What gets preserved
 
@@ -224,8 +300,10 @@ and date, and recording it in the resume state before moving on.
 ## Development
 
 ```bash
+git clone https://github.com/cKurultayKalkan/email-export-import.git
+cd email-export-import
 uv sync --extra gui
-uv run pytest            # full suite (161 tests, no network — uses an in-memory IMAP fake)
+uv run pytest            # full suite (209 tests, no network — uses an in-memory IMAP fake)
 ```
 
 Tests are behavior-focused and network-free: an in-memory `FakeIMAPClient`
