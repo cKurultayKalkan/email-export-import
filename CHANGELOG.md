@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.10 — 2026-07-13
+
+### Fixed
+- **The packaged desktop app now actually starts.** Three stacked packaging
+  faults, uncovered layer by layer once macOS Gatekeeper stopped masking
+  them, are fixed:
+  - `flet` itself was never bundled (it lived in an optional extra, which
+    `flet build` ignores) — the app died at `import flet`.
+  - `certifi` was missing — the flet bootstrap imports it before anything
+    else runs.
+  - The app package shipped the entire repo directory (a second Python's
+    `.venv`, the full `.git` history, tests, docs): 29 MB / 3,305 files where
+    0.5 MB / 62 files of app source belongs. `flet build` now gets an
+    explicit exclude list.
+- Verified end to end with a local build before this release: fresh install
+  launches, UI renders, no startup errors.
+
 ## v0.1.9 — 2026-07-13
 
 ### Changed
