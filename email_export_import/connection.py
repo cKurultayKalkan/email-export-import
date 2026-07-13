@@ -59,6 +59,51 @@ def _cap_send_buffer(client: IMAPClient, size: int = SEND_BUFFER_BYTES) -> None:
         pass
 
 
+# The second, independent layer against the same kernel panic: even with the
+# send buffer pinned, a machine with TCP segmentation offload enabled plus
+# content-filter software was seen panicking under sustained upload (observed
+# in the field on macOS 26 with Check Point installed). Slicing every write
+# and pausing between slices keeps the kernel's queue shallow at all times,
+# so the oversized-mbuf-chain copy that panics simply never exists.
+#
+# This ceiling is DELIBERATELY not configurable — no setting, no environment
+# variable. The user-facing rate limit can only slow uploads further; nothing
+# can raise this. A migration tool must never be able to take the host down,
+# and "fast" is not worth a kernel panic.
+HARD_UPLOAD_CEILING_BYTES_PER_SEC = 2 * 1024 * 1024  # field-validated for 5h46m
+
+
+class _PacedSocket:
+    """Wraps the connection's socket: writes go out in small slices with a
+    drain pause after each, enforcing the hard per-connection upload ceiling.
+    Everything else passes through untouched (reads use imaplib's buffered
+    file object created before this wrapper is installed)."""
+
+    CHUNK = 64 * 1024
+    _PAUSE = CHUNK / HARD_UPLOAD_CEILING_BYTES_PER_SEC
+
+    def __init__(self, sock) -> None:
+        self._sock = sock
+
+    def __getattr__(self, name):
+        return getattr(self._sock, name)
+
+    def sendall(self, data) -> None:
+        mv = memoryview(bytes(data)) if not isinstance(data, (bytes, memoryview)) else memoryview(data)
+        for i in range(0, len(mv), self.CHUNK):
+            self._sock.sendall(mv[i : i + self.CHUNK])
+            time.sleep(self._PAUSE)  # let the queue drain before the next slice
+
+
+def _install_hard_ceiling(client: IMAPClient) -> None:
+    """Best-effort like _cap_send_buffer, but on any real connection this
+    succeeds; the guard is for exotic transports in tests."""
+    try:
+        client._imap.sock = _PacedSocket(client._imap.sock)  # noqa: SLF001
+    except Exception:
+        pass
+
+
 class MailConnection:
     """Owns one IMAP session; reconnects and retries transient failures.
 
@@ -122,6 +167,7 @@ class MailConnection:
                 f"Could not connect to {self.account.host}:{self.account.port} — {exc}"
             ) from exc
         _cap_send_buffer(client)  # bound the kernel's send queue before any upload
+        _install_hard_ceiling(client)  # and keep that queue shallow, always
         try:
             client.login(self.account.email, self.account.password)
         except LoginError as exc:

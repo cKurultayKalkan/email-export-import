@@ -376,3 +376,65 @@ def test_connect_survives_a_socket_that_rejects_tuning(monkeypatch):
         Account(host="h", port=993, ssl=True, email="a@x", password="p")
     )
     assert conn.connect() is not None  # connected anyway
+
+
+# ---- hard upload safety ceiling ---------------------------------------------
+# The kernel panic class (m_copym_with_hdrs overflow) is fed by handing the
+# kernel large writes that build oversized mbuf chains. The ceiling below is
+# NOT user-configurable by design: settings can only slow uploads further.
+
+def test_paced_socket_slices_and_paces_writes(monkeypatch):
+    from email_export_import import connection
+
+    sent, naps = [], []
+
+    class FakeSock:
+        def sendall(self, data):
+            sent.append(len(data))
+
+    monkeypatch.setattr(connection.time, "sleep", lambda s: naps.append(s))
+    paced = connection._PacedSocket(FakeSock())
+    paced.sendall(b"x" * (300 * 1024))  # one oversized message body
+
+    assert max(sent) <= connection._PacedSocket.CHUNK
+    assert sum(sent) == 300 * 1024
+    assert len(naps) == len(sent)  # a drain pause after every slice
+    # the pauses implement the per-connection hard rate ceiling
+    rate = connection._PacedSocket.CHUNK / naps[0]
+    assert rate <= connection.HARD_UPLOAD_CEILING_BYTES_PER_SEC
+
+
+def test_paced_socket_delegates_everything_else():
+    from email_export_import import connection
+
+    class FakeSock:
+        def getpeername(self):
+            return ("1.2.3.4", 993)
+
+    paced = connection._PacedSocket(FakeSock())
+    assert paced.getpeername() == ("1.2.3.4", 993)
+
+
+def test_connect_installs_the_paced_socket(monkeypatch):
+    from email_export_import import connection
+    from email_export_import.models import Account
+    from tests.fakes import FakeIMAPClient
+
+    class SockyFake(FakeIMAPClient):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+
+            class _Imap:
+                class _Sock:
+                    def setsockopt(self, *a): pass
+                sock = _Sock()
+            self._imap = _Imap()
+
+    monkeypatch.setattr(connection, "IMAPClient",
+                        lambda host, port=993, ssl=True, **kw: SockyFake())
+    conn = connection.MailConnection(
+        Account(host="h.test", port=993, ssl=True, email="a@x", password="p")
+    )
+    conn.connect()
+    assert isinstance(conn._client._imap.sock, connection._PacedSocket), \
+        "the hard ceiling must be installed on every connection"
