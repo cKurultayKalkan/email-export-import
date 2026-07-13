@@ -98,7 +98,25 @@ def _walk(control, out):
     if on_click is not None:
         label = getattr(control, "content", None)
         if not isinstance(label, str):
+            # a Text control as content (e.g. menu items) — use its value
+            label = getattr(label, "value", None) if label is not None else None
+        if not isinstance(label, str):
             label = getattr(control, "text", None)
+        if not isinstance(label, str):
+            # composite content (e.g. toolbar icon+label): first Text within
+            stack = [getattr(control, "content", None)]
+            while stack:
+                c = stack.pop()
+                if c is None:
+                    continue
+                v = getattr(c, "value", None)
+                if isinstance(v, str) and v:
+                    label = v
+                    break
+                stack.extend(getattr(c, "controls", []) or [])
+                inner = getattr(c, "content", None)
+                if inner is not None and not isinstance(inner, str):
+                    stack.append(inner)
         out.append((label, control))
     for child in getattr(control, "controls", []) or []:
         _walk(child, out)
@@ -318,7 +336,7 @@ def test_bulk_starts_all_accounts(monkeypatch, tmp_path):
     monkeypatch.setattr(connection, "IMAPClient", factory)
 
     page = _run_page()
-    assert _click(page.views[-1], EN("dash.new_bulk")), "New-bulk button not found"
+    assert _click(page.views[-1], EN("menu.bulk")), "Bulk menu item not found"
     assert page.views[-1].route == "/bulk"
     _fill_bulk(page, "src.test", "dst.test",
                [("a@x.com", "p1", "p1"), ("b@x.com", "p2", "p2")])
@@ -338,7 +356,7 @@ def test_bulk_cap_one_queues_second(monkeypatch, tmp_path):
     monkeypatch.setattr(connection, "IMAPClient", factory)
 
     page = _run_page()
-    assert _click(page.views[-1], EN("dash.new_bulk"))
+    assert _click(page.views[-1], EN("menu.bulk"))
     _fill_bulk(page, "src.test", "dst.test",
                [("a@x.com", "p1", "p1"), ("b@x.com", "p2", "p2")])
 
@@ -608,12 +626,11 @@ def test_detail_edit_saves_connection(monkeypatch, tmp_path):
     # no IMAP needed — editing/saving is pure config
     page = _run_page()
 
-    assert _click(page.views[-1], EN("dash.detail")), "Detail button not found"
-    assert page.views[-1].route == "/detail"
-    assert _click(page.views[-1], EN("detail.edit")), "Edit button not found on detail"
-
-    # editor now shown — find the destination host field and change it
-    detail = page.views[-1]
+    # the paused run is auto-selected; Edit lives in the side panel and
+    # opens a dialog editor
+    assert _click(page.views[-1], EN("detail.edit")), "Edit button not found in panel"
+    assert page.dialog is not None
+    detail = page.dialog
     tfs = []
 
     def collect_tf(c):
@@ -621,15 +638,18 @@ def test_detail_edit_saves_connection(monkeypatch, tmp_path):
             tfs.append(c)
         for ch in getattr(c, "controls", []) or []:
             collect_tf(ch)
+        content = getattr(c, "content", None)
+        if content is not None and not isinstance(content, str):
+            collect_tf(content)
 
-    for c in detail.controls:
-        collect_tf(c)
+    collect_tf(detail.content)  # the editor lives in the dialog's content
     # editor has host+port per side; set the last host field (destination)
     host_fields = [t for t in tfs if t.label == EN("account.host")]
     assert len(host_fields) == 2
     host_fields[1].value = "newdst.example.com"
 
     assert _click(detail, EN("detail.save")), "Save button not found"
+    assert page.dialog is None  # dialog closed on save
 
     from email_export_import.state import MigrationState as MS
     reloaded = MS.for_pair("a@x.com", "b@y.com", base_dir=tmp_path)
@@ -690,7 +710,7 @@ def test_settings_button_opens_settings_and_completed_card_shown(monkeypatch, tm
 
     # done card is visible (Detail button present) and Settings nav exists
     assert EN("nav.settings") in labels
-    assert EN("dash.detail") in labels  # the completed card rendered
+    assert EN("dash.sync") in labels  # the completed run's panel rendered
 
     assert _click(dash, EN("nav.settings")), "Settings button did nothing"
     assert page.views[-1].route == "/settings"
@@ -817,7 +837,22 @@ def test_queued_bulk_work_counts_as_active(monkeypatch):
 # Migration menu additionally grows context items for the current page.
 
 def _menubar_of(view):
-    return next((c for c in view.controls if isinstance(c, ft.MenuBar)), None)
+    # The bar ships wrapped in a full-width container — find it by walking.
+    found: list = []
+
+    def walk(c):
+        if isinstance(c, ft.MenuBar):
+            found.append(c)
+            return
+        for ch in getattr(c, "controls", []) or []:
+            walk(ch)
+        content = getattr(c, "content", None)
+        if content is not None and not isinstance(content, str):
+            walk(content)
+
+    for c in view.controls:
+        walk(c)
+    return found[0] if found else None
 
 
 def test_every_screen_has_the_menubar():
@@ -866,3 +901,54 @@ def test_menubar_quit_uses_the_close_guard(monkeypatch):
     assert _click(page.views[-1], EN("menu.quit"))
     assert page.dialog is not None, "quit with active runs must ask first"
     assert page.window.destroy_calls == 0
+
+
+def _texts_of(view):
+    found: list = []
+
+    def walk(c):
+        v = getattr(c, "value", None)
+        if isinstance(v, str):
+            found.append(v)
+        for ch in getattr(c, "controls", []) or []:
+            walk(ch)
+        content = getattr(c, "content", None)
+        if content is not None and not isinstance(content, str):
+            walk(content)
+
+    for c in view.controls:
+        walk(c)
+    return found
+
+
+def test_desktop_chrome_toolbar_and_statusbar():
+    page = _run_page()
+    view = page.views[-1]
+    texts = _texts_of(view)
+    assert EN("status.ready") in texts, "status bar missing"
+    # toolbar carries the core actions as icon+label buttons
+    labels = [lbl for lbl, _ in _clickables(view)]
+    assert labels.count(EN("menu.new")) >= 2  # menu item + toolbar button
+    # chrome present on settings too, with the version in the status bar
+    assert _click(view, EN("nav.settings"))
+    from email_export_import import __version__
+    assert f"v{__version__}" in _texts_of(page.views[-1])
+
+
+def test_toolbar_context_action_on_plan_screen(monkeypatch, tmp_path):
+    _make_paused_session(tmp_path)
+    monkeypatch.setattr(
+        connection, "IMAPClient",
+        lambda host, port=993, ssl=True, **kw: FakeIMAPClient(
+            folders={"INBOX": [make_message(uid=1, message_id="<m1@x>")]}
+        ),
+    )
+    page = _run_page()
+    assert _click(page.views[-1], EN("dash.resume"))
+    fields = _text_fields(page.dialog)
+    fields[0].value = "p"
+    fields[1].value = "p"
+    assert _click(page.dialog, EN("resume.go"))
+    assert _wait(lambda: page.views and page.views[-1].route == "/plan")
+    labels = [lbl for lbl, _ in _clickables(page.views[-1])]
+    assert labels.count(EN("plan.start")) >= 2  # plan button + toolbar/menu extra

@@ -16,6 +16,9 @@ dependencies = [
     # ModuleNotFoundError: flet. Keep the version pinned in lockstep with the
     # gui extra below.
     "flet>=0.85,<0.86",
+    # macOS menu-bar (status item) icon for the packaged app. pystray pulls
+    # Pillow and the pyobjc frameworks it needs on darwin.
+    "pystray>=0.19 ; sys_platform == 'darwin'",
 ]
 
 [project.scripts]

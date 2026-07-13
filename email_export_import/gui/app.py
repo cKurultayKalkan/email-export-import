@@ -11,6 +11,7 @@ from ..models import Account
 from ..state import MigrationState
 from . import prefs
 from . import sysinfo
+from . import tray
 from . import updater
 from . import views
 from .async_ops import run_async
@@ -169,36 +170,65 @@ def _page_main(page: ft.Page) -> None:
             rate_limit=manager.rate_limit, on_rate_limit=set_rate_limit,
             on_safe_mode=safe_mode, tso_on=sysinfo.tso_enabled(),
         )
-        view.controls.insert(0, _menubar())
-        page.views.append(view)
+        page.views.append(_decorate(view))
         page.update()
 
     def show_dashboard() -> None:
         page.views.clear()
-        page.views.append(_dashboard_view())
+        page.views.append(_main_view())
         page.update()
 
     # Live-render bookkeeping so the poll can update values in place instead of
     # rebuilding the view every tick (a rebuild recreates every button and
-    # kills hover/click on the cards).
-    render = {"dash_refs": {}, "dash_sig": None, "detail_refs": {}, "detail_sig": None}
+    # kills hover/click on the rows).
+    render = {"dash_refs": {}, "dash_sig": None}
 
-    def _dashboard_view() -> ft.View:
-        hk = highlight[0]
-        highlight[0] = None
+    # ---- master-detail main view -----------------------------------------
+
+    selected_key: list[str | None] = [None]
+
+    def select_run(key: str) -> None:
+        selected_key[0] = key
+        show_dashboard()
+
+    def _main_extras(snap) -> list:
+        if snap is None:
+            return []
+        if snap.status == "running":
+            return [(ft.Icons.PAUSE, i18n.t("dash.pause"),
+                     lambda: do_pause(snap.key))]
+        if snap.status in ("paused", "cancelled"):
+            return [(ft.Icons.PLAY_ARROW, i18n.t("dash.resume"),
+                     lambda: ask_resume(snap.key))]
+        if snap.status == "done":
+            return [(ft.Icons.SYNC, i18n.t("dash.sync"),
+                     lambda: ask_resume(snap.key))]
+        return []
+
+    def _main_view() -> ft.View:
         snaps = manager.snapshot_all()
+        if highlight[0] is not None:
+            selected_key[0] = highlight[0]
+            highlight[0] = None
+        if selected_key[0] is None or not any(
+            s.key == selected_key[0] for s in snaps
+        ):
+            selected_key[0] = snaps[0].key if snaps else None
+        sel = next((s for s in snaps if s.key == selected_key[0]), None)
+        run = manager.get(sel.key) if sel is not None else None
+        cfg = run.state.config if run is not None else None
         refs: dict = {}
-        view = views.build_dashboard(
-            i18n, snaps,
-            on_new=start_wizard, on_pause=do_pause, on_resume=ask_resume,
-            on_cancel=do_cancel, on_detail=show_detail, on_dismiss=do_dismiss,
-            on_settings=show_settings, on_new_bulk=show_bulk,
-            highlight_key=hk, refs=refs,
+        view = views.build_main(
+            i18n, snaps, selected_key[0], cfg,
+            on_select=select_run,
+            on_pause=do_pause, on_resume=ask_resume, on_cancel=do_cancel,
+            on_dismiss=do_dismiss,
+            on_edit=lambda: _edit_dialog(selected_key[0]),
+            refs=refs,
         )
         render["dash_refs"] = refs
-        render["dash_sig"] = views.dashboard_signature(snaps)
-        view.controls.insert(0, _menubar())
-        return view
+        render["dash_sig"] = (views.dashboard_signature(snaps), selected_key[0])
+        return _decorate(view, _main_extras(sel), scrollable=False)
 
     def do_pause(key: str) -> None:
         run = manager.get(key)
@@ -374,69 +404,52 @@ def _page_main(page: ft.Page) -> None:
             )
         )
 
-    # ---- detail ---------------------------------------------------------
+    # ---- edit connection (dialog) ----------------------------------------
 
-    detail_key: list[str | None] = [None]
-    detail_editing: list[bool] = [False]
-
-    def _save_connection(key: str, new_src: dict, new_dst: dict) -> None:
+    def _edit_dialog(key: str | None) -> None:
+        if key is None:
+            return
         run = manager.get(key)
-        if run is not None:
-            cfg = dict(run.state.config or {})
-            cfg["src"] = new_src
-            cfg["dst"] = new_dst
+        if run is None or not run.state.config:
+            return
+        cfg = dict(run.state.config)
+        src_controls, src_collect = views._account_editor(
+            i18n, i18n.t("account.source_title"), cfg.get("src", {}))
+        dst_controls, dst_collect = views._account_editor(
+            i18n, i18n.t("account.dest_title"), cfg.get("dst", {}))
+
+        def save(_e=None) -> None:
+            cfg["src"] = src_collect()
+            cfg["dst"] = dst_collect()
             run.state.set_config(cfg)
             run.state.flush()
-        detail_editing[0] = False
-        show_detail(key)
+            page.pop_dialog()
+            show_dashboard()
 
-    def _detail_view(snap) -> ft.View:
-        refs: dict = {}
-        run = manager.get(snap.key)
-        cfg = run.state.config if run is not None else None
-        view = views.build_detail(
-            i18n, snap, on_pause=do_pause, on_resume=ask_resume,
-            on_cancel=do_cancel, on_back=back_to_dashboard, refs=refs,
-            config=cfg, editing=detail_editing[0],
-            on_edit=lambda: _enter_edit(snap.key),
-            on_save=lambda s, d: _save_connection(snap.key, s, d),
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text(i18n.t("detail.edit")),
+                content=ft.Column(
+                    list(src_controls) + [ft.Divider()] + list(dst_controls),
+                    tight=True, scroll=ft.ScrollMode.AUTO, width=420,
+                ),
+                actions=[
+                    ft.TextButton(i18n.t("resume.cancel"),
+                                  on_click=lambda e: page.pop_dialog()),
+                    ft.FilledButton(i18n.t("detail.save"), on_click=save),
+                ],
+            )
         )
-        render["detail_refs"] = refs
-        render["detail_sig"] = views.detail_signature(snap)
-        # The Migration menu follows the run's state on this page.
-        extras: list = []
-        if snap.status == "running":
-            extras.append((i18n.t("dash.pause"), lambda: do_pause(snap.key)))
-        elif snap.status in ("paused", "cancelled"):
-            extras.append((i18n.t("dash.resume"), lambda: ask_resume(snap.key)))
-        elif snap.status == "done":
-            extras.append((i18n.t("dash.sync"), lambda: ask_resume(snap.key)))
-        view.controls.insert(0, _menubar(extras))
-        return view
-
-    def _enter_edit(key: str) -> None:
-        detail_editing[0] = True
-        show_detail(key)
 
     def show_detail(key: str) -> None:
-        detail_key[0] = key
-        run = manager.get(key)
-        if run is None:
-            show_dashboard()
-            return
-        page.views.clear()
-        page.views.append(_detail_view(run.snapshot()))
-        page.update()
+        select_run(key)  # detail lives in the side panel now
 
     def back_to_dashboard() -> None:
-        detail_key[0] = None
-        detail_editing[0] = False  # leaving detail discards an unsaved edit
         show_dashboard()
 
     def refresh_current() -> None:
-        if detail_key[0] is not None:
-            show_detail(detail_key[0])
-        else:
+        if page.views and page.views[-1].route == "/":
             show_dashboard()
 
     # ---- background poll ------------------------------------------------
@@ -455,36 +468,25 @@ def _page_main(page: ft.Page) -> None:
                 route = page.views[-1].route
                 if route == "/":
                     snaps = manager.snapshot_all()
-                    if views.dashboard_signature(snaps) == render["dash_sig"]:
-                        # Same cards, same statuses — only progress moved.
-                        # Update values in place; leave buttons untouched.
-                        views.apply_dashboard_values(render["dash_refs"], snaps, i18n)
-                        for entry in render["dash_refs"].values():
+                    sig = (views.dashboard_signature(snaps), selected_key[0])
+                    if sig == render["dash_sig"]:
+                        # Same rows, same statuses, same selection — only
+                        # progress moved. Update values in place; leave the
+                        # row/button controls untouched.
+                        views.apply_main_values(render["dash_refs"], snaps,
+                                                i18n, selected_key[0])
+                        for key, entry in render["dash_refs"].items():
                             safe_update(entry["counter"])
-                            if entry["bar"] is not None:
+                            if entry.get("bar") is not None:
                                 safe_update(entry["bar"])
+                            if key == "_panel":
+                                safe_update(entry["folder"])
                         page.update()  # also the liveness probe: raises once the page is gone
                     elif page.views and page.views[-1].route == "/":
-                        # Card set or a status changed — buttons differ, so a
-                        # full rebuild is correct (and rare).
-                        page.views[-1] = _dashboard_view()
+                        # Row set, a status, or the selection changed —
+                        # buttons differ, so a full rebuild is correct (rare).
+                        page.views[-1] = _main_view()
                         page.update()
-                elif route == "/detail" and detail_key[0] is not None:
-                    run = manager.get(detail_key[0])
-                    if run is not None:
-                        snap = run.snapshot()
-                        if views.detail_signature(snap) == render["detail_sig"]:
-                            views.apply_detail_values(render["detail_refs"], snap, i18n)
-                            entry = render["detail_refs"].get("_")
-                            if entry is not None:
-                                safe_update(entry["counter"])
-                                safe_update(entry["folder"])
-                                if entry["bar"] is not None:
-                                    safe_update(entry["bar"])
-                            page.update()  # liveness probe: raises once the page is gone
-                        elif page.views and page.views[-1].route == "/detail":
-                            page.views[-1] = _detail_view(snap)
-                            page.update()
             except RuntimeError:
                 return  # page closed / controls unmounted
             except Exception:
@@ -561,9 +563,8 @@ def _page_main(page: ft.Page) -> None:
 
         view, view_handles = views.build_account(i18n, role, initial, on_test, on_back, status)
         handles.update(view_handles)
-        view.controls.insert(0, _menubar())
         page.views.clear()
-        page.views.append(view)
+        page.views.append(_decorate(view))
         page.update()
 
     def go_plan() -> None:
@@ -600,10 +601,10 @@ def _page_main(page: ft.Page) -> None:
                 i18n, ws.plan, ws.skip, ws.workers, ws.spool,
                 on_toggle, on_workers, on_spool, start_migration, back,
             )
-            view.controls.insert(
-                0, _menubar([(i18n.t("plan.start"), start_migration)])
+            return _decorate(
+                view, [(ft.Icons.PLAY_ARROW, i18n.t("plan.start"), start_migration)],
+                scrollable=False,  # plan has its own expanding scroll table
             )
-            return view
 
         page.views.clear()
         page.views.append(_plan_view())
@@ -637,9 +638,8 @@ def _page_main(page: ft.Page) -> None:
 
     def show_bulk() -> None:
         view, _handles = views.build_bulk(i18n, on_start=start_bulk, on_back=back_to_dashboard)
-        view.controls.insert(0, _menubar())
         page.views.clear()
-        page.views.append(view)
+        page.views.append(_decorate(view))
         page.update()
 
     def start_bulk(pairs: list, preset_key: str | None) -> None:
@@ -770,11 +770,41 @@ def _page_main(page: ft.Page) -> None:
         )
 
     def _on_window_event(e) -> None:
-        if getattr(e, "type", None) == ft.WindowEventType.CLOSE:
+        if getattr(e, "type", None) != ft.WindowEventType.CLOSE:
+            return
+        if tray_handle is not None:
+            # A menu-bar icon is present (packaged macOS app): the close
+            # button sends the app to the background for real — windows
+            # hidden AND the Dock icon dropped; only the status item stays.
+            # Quitting is an explicit menu action, guarded by request_quit.
+            if not tray.hide_app():
+                page.window.minimized = True  # fallback: at least minimize
+                page.update()
+        else:
             request_quit()
 
     page.window.prevent_close = True
     page.window.on_event = _on_window_event
+
+    # ---- macOS status item (packaged app only; inert elsewhere) ----------
+
+    def _restore_window() -> None:
+        tray.show_app()  # Dock icon back + unhide (no-op when not hidden)
+        page.window.minimized = False
+        page.update()
+
+    def _tray_quit() -> None:
+        _restore_window()  # the busy/quit dialog must be visible
+        request_quit()
+
+    tray_handle = tray.start_status_item(
+        i18n.t("app.title"),
+        [
+            (lambda item: i18n.t("tray.status", count=manager.active_count()), None),
+            (i18n.t("tray.show"), ui(_restore_window)),
+            (i18n.t("menu.quit"), ui(_tray_quit)),
+        ],
+    )
 
     # ---- menu bar ---------------------------------------------------------
 
@@ -797,7 +827,7 @@ def _page_main(page: ft.Page) -> None:
             )
         )
 
-    def _menubar(migration_extras=None) -> ft.MenuBar:
+    def _menubar(migration_extras=None) -> ft.Control:
         return views.build_menubar(
             i18n,
             on_new=start_wizard, on_bulk=show_bulk, on_quit=request_quit,
@@ -806,6 +836,48 @@ def _page_main(page: ft.Page) -> None:
             on_about=_show_about,
             migration_extras=migration_extras,
         )
+
+    def _decorate(view: ft.View, extras: list | None = None,
+                  scrollable: bool = True) -> ft.View:
+        """Desktop chrome: menu bar + toolbar pinned on top, status bar at
+        the bottom, the view's own content scrolling in between. `extras`
+        are (icon, label, handler) page actions, shown in both the Migration
+        menu and the toolbar's middle group. Pass scrollable=False for views
+        that manage their own internal scrolling with expand children (a
+        scrollable wrapper would give them unbounded height)."""
+        body = ft.Container(
+            content=ft.Column(
+                list(view.controls),
+                spacing=view.spacing if view.spacing is not None else 10,
+                scroll=view.scroll or (ft.ScrollMode.AUTO if scrollable else None),
+                expand=True,
+            ),
+            padding=view.padding if view.padding is not None else 10,
+            expand=True,
+        )
+        toolbar_items: list = [
+            (ft.Icons.ADD, i18n.t("menu.new"), start_wizard),
+            (ft.Icons.LIBRARY_ADD, i18n.t("menu.bulk"), show_bulk),
+        ]
+        if extras:
+            toolbar_items.append(None)
+            toolbar_items += extras
+        toolbar_items += [None, (ft.Icons.SETTINGS, i18n.t("nav.settings"), show_settings)]
+        active = manager.active_count()
+        status = (
+            i18n.t("status.ready") if active == 0
+            else i18n.t("tray.status", count=active)
+        )
+        view.controls = [
+            _menubar(extras),
+            views.build_toolbar(i18n, toolbar_items),
+            body,
+            views.build_statusbar(i18n, status, __version__),
+        ]
+        view.padding = 0
+        view.spacing = 0
+        view.scroll = None
+        return view
 
     show_dashboard()
     page.run_task(poll)

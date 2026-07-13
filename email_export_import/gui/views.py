@@ -851,32 +851,330 @@ def build_menubar(
     on_check_update: Callable[[], None],
     on_about: Callable[[], None],
     migration_extras: list[tuple[str, Callable[[], None]]] | None = None,
-) -> ft.MenuBar:
-    """The top menu carried by every screen.
+) -> ft.Control:
+    """The top menu bar carried by every screen.
 
     Migration / View / Help are constant; `migration_extras` prepends
     page-specific actions (pause, resume, start…) to the Migration menu, so
-    the menu follows the screen the user is on."""
+    the menu follows the screen the user is on. Returned as a full-width bar
+    that cancels the view's own padding, so it reads as the window's top row
+    rather than a floating widget."""
+
+    cursor = ft.ButtonStyle(mouse_cursor=ft.MouseCursor.CLICK)
 
     def item(label: str, handler: Callable[[], None]) -> ft.MenuItemButton:
-        return ft.MenuItemButton(content=label, on_click=lambda e: handler())
+        return ft.MenuItemButton(
+            content=ft.Text(label, size=13),
+            on_click=lambda e: handler(),
+            style=cursor,
+        )
 
-    migration_items = [item(label, fn) for label, fn in (migration_extras or [])]
+    def submenu(label: str, controls: list) -> ft.SubmenuButton:
+        return ft.SubmenuButton(
+            content=ft.Text(label, size=13),
+            controls=controls,
+            style=cursor,
+        )
+
+    migration_items = [item(label, fn) for _icon, label, fn in (migration_extras or [])]
     migration_items += [
         item(i18n.t("menu.new"), on_new),
         item(i18n.t("menu.bulk"), on_bulk),
         item(i18n.t("menu.quit"), on_quit),
     ]
-    return ft.MenuBar(
+    menubar = ft.MenuBar(
+        style=ft.MenuStyle(bgcolor=ft.Colors.TRANSPARENT, elevation=0,
+                           padding=ft.Padding(0, 0, 0, 0)),
         controls=[
-            ft.SubmenuButton(content=i18n.t("menu.migration"), controls=migration_items),
-            ft.SubmenuButton(content=i18n.t("menu.view"), controls=[
+            submenu(i18n.t("menu.migration"), migration_items),
+            submenu(i18n.t("menu.view"), [
                 item(i18n.t("menu.dashboard"), on_dashboard),
                 item(i18n.t("nav.settings"), on_settings),
             ]),
-            ft.SubmenuButton(content=i18n.t("menu.help"), controls=[
+            submenu(i18n.t("menu.help"), [
                 item(i18n.t("settings.check_updates"), on_check_update),
                 item(i18n.t("menu.about"), on_about),
             ]),
         ],
     )
+    # Flat, compact, full-width — a system menu row, not a floating widget.
+    return ft.Container(
+        padding=ft.Padding(6, 2, 6, 2),
+        border=ft.Border(
+            bottom=ft.BorderSide(1, ft.Colors.with_opacity(0.12, ft.Colors.ON_SURFACE))
+        ),
+        content=ft.Row([menubar]),
+    )
+
+
+ToolbarItem = "tuple[str, str, Callable[[], None]] | None"  # (icon, label, fn); None = divider
+
+
+def build_toolbar(i18n: I18n, items: list) -> ft.Control:
+    """Icon-over-label action row under the menu, desktop-toolbar style.
+
+    `items`: (icon, label, handler) tuples, or None for a thin vertical
+    divider between action groups."""
+
+    def tool(icon: str, label: str, handler: Callable[[], None]) -> ft.Control:
+        return ft.TextButton(
+            style=ft.ButtonStyle(
+                mouse_cursor=ft.MouseCursor.CLICK,
+                padding=ft.Padding(12, 6, 12, 6),
+                shape=ft.RoundedRectangleBorder(radius=6),
+            ),
+            content=ft.Column(
+                [
+                    ft.Icon(icon, size=20),
+                    ft.Text(label, size=11, weight=ft.FontWeight.W_400),
+                ],
+                spacing=2,
+                tight=True,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            on_click=lambda e: handler(),
+        )
+
+    def divider() -> ft.Control:
+        return ft.Container(
+            width=1, height=36,
+            margin=ft.Margin(6, 0, 6, 0),
+            bgcolor=ft.Colors.with_opacity(0.15, ft.Colors.ON_SURFACE),
+        )
+
+    row = [divider() if item is None else tool(*item) for item in items]
+    return ft.Container(
+        padding=ft.Padding(8, 4, 8, 4),
+        border=ft.Border(
+            bottom=ft.BorderSide(1, ft.Colors.with_opacity(0.12, ft.Colors.ON_SURFACE))
+        ),
+        content=ft.Row(row, spacing=2),
+    )
+
+
+def build_statusbar(i18n: I18n, status_text: str, version: str) -> ft.Control:
+    """The thin bottom bar: current state left, version right."""
+    muted = ft.Colors.with_opacity(0.6, ft.Colors.ON_SURFACE)
+    return ft.Container(
+        padding=ft.Padding(10, 3, 10, 3),
+        border=ft.Border(
+            top=ft.BorderSide(1, ft.Colors.with_opacity(0.12, ft.Colors.ON_SURFACE))
+        ),
+        content=ft.Row(
+            [
+                ft.Text(status_text, size=12, color=muted),
+                ft.Container(expand=True),
+                ft.Text(f"v{version}", size=12, color=muted),
+            ]
+        ),
+    )
+
+
+# ---- master-detail main view (ui-redesign spec) ----------------------------
+
+_STATUS_DOT = {
+    "running": ft.Colors.GREEN_400,
+    "queued": ft.Colors.AMBER_400,
+    "paused": ft.Colors.AMBER_600,
+    "done": ft.Colors.BLUE_400,
+    "error": ft.Colors.RED_400,
+    "cancelled": ft.Colors.GREY_500,
+}
+
+_HAIRLINE = 0.12
+
+
+def _hairline() -> str:
+    return ft.Colors.with_opacity(_HAIRLINE, ft.Colors.ON_SURFACE)
+
+
+def build_run_list(
+    i18n: I18n,
+    snapshots: list[RunSnapshot],
+    selected_key: str | None,
+    on_select: Callable[[str], None],
+    refs: dict,
+) -> ft.Control:
+    """Left master pane: one dense row per migration (dot, pair, status,
+    thin progress). Clicking a row selects it; `refs` registers each row's
+    live controls for in-place poll updates."""
+    rows: list[ft.Control] = [
+        ft.Container(
+            padding=ft.Padding(12, 8, 12, 6),
+            content=ft.Text(i18n.t("dash.heading"), size=11,
+                            weight=ft.FontWeight.W_600,
+                            color=ft.Colors.with_opacity(0.6, ft.Colors.ON_SURFACE)),
+        )
+    ]
+    if not snapshots:
+        rows.append(ft.Container(
+            padding=ft.Padding(12, 18, 12, 18),
+            content=ft.Text(i18n.t("dash.empty"), size=13,
+                            color=ft.Colors.with_opacity(0.6, ft.Colors.ON_SURFACE)),
+        ))
+    for snap in snapshots:
+        pct = (snap.processed / snap.total) if snap.total else None
+        bar = ft.ProgressBar(
+            value=pct, height=3, bgcolor=_hairline(),
+        ) if snap.status in ("running", "paused", "queued") or (
+            snap.total and snap.processed < snap.total
+        ) else ft.ProgressBar(value=1.0, height=3, bgcolor=_hairline())
+        status_text = ft.Text(i18n.t(f"status.{snap.status}"), size=12,
+                              color=ft.Colors.with_opacity(0.7, ft.Colors.ON_SURFACE))
+        counter = ft.Text(
+            f"{snap.processed} / {snap.total}" if snap.total else str(snap.processed),
+            size=12, color=ft.Colors.with_opacity(0.7, ft.Colors.ON_SURFACE),
+        )
+        row = ft.Container(
+            on_click=lambda e, k=snap.key: on_select(k),
+            ink=True,
+            bgcolor=(ft.Colors.with_opacity(0.08, ft.Colors.PRIMARY)
+                     if snap.key == selected_key else None),
+            padding=ft.Padding(12, 8, 12, 8),
+            border=ft.Border(bottom=ft.BorderSide(1, _hairline())),
+            content=ft.Column(
+                [
+                    ft.Row([
+                        ft.Container(width=8, height=8, border_radius=4,
+                                     bgcolor=_STATUS_DOT.get(snap.status, ft.Colors.GREY)),
+                        ft.Text(snap.title, size=13, expand=True,
+                                overflow=ft.TextOverflow.ELLIPSIS),
+                        status_text,
+                        counter,
+                    ], spacing=8),
+                    bar,
+                ],
+                spacing=5,
+            ),
+        )
+        refs[snap.key] = {"row": row, "bar": bar, "counter": counter,
+                          "status": status_text}
+        rows.append(row)
+    return ft.Column(rows, spacing=0, scroll=ft.ScrollMode.AUTO, expand=True)
+
+
+def build_side_panel(
+    i18n: I18n,
+    snap: RunSnapshot | None,
+    config: dict | None,
+    on_pause: Callable[[str], None],
+    on_resume: Callable[[str], None],
+    on_cancel: Callable[[str], None],
+    on_dismiss: Callable[[str], None],
+    on_edit: Callable[[], None],
+    refs: dict,
+) -> ft.Control:
+    """Right properties pane for the selected migration."""
+    muted = ft.Colors.with_opacity(0.6, ft.Colors.ON_SURFACE)
+    if snap is None:
+        return ft.Container(
+            width=300, padding=20, alignment=ft.Alignment.CENTER,
+            content=ft.Text(i18n.t("panel.none"), size=13, color=muted),
+        )
+    pct = (snap.processed / snap.total) if snap.total else None
+    bar = ft.ProgressBar(value=pct, height=6, bgcolor=_hairline())
+    counter = ft.Text(f"{snap.processed} / {snap.total}", size=13)
+    folder = ft.Text(snap.current_folder or "", size=13)
+    refs["_panel"] = {"bar": bar, "counter": counter, "folder": folder}
+
+    def field(label: str, control: ft.Control) -> ft.Row:
+        return ft.Row([
+            ft.Text(label, size=12, color=muted, width=90),
+            control,
+        ], spacing=8)
+
+    actions: list[ft.Control] = []
+    if snap.status == "running":
+        actions.append(ft.OutlinedButton(i18n.t("dash.pause"),
+                       on_click=lambda e: on_pause(snap.key)))
+    if snap.status in ("paused", "cancelled"):
+        actions.append(ft.FilledButton(i18n.t("dash.resume"),
+                       on_click=lambda e: on_resume(snap.key)))
+    if snap.status == "done":
+        actions.append(ft.OutlinedButton(i18n.t("dash.sync"),
+                       on_click=lambda e: on_resume(snap.key)))
+    if snap.status in ("running", "queued", "paused"):
+        actions.append(ft.TextButton(i18n.t("dash.cancel"),
+                       on_click=lambda e: on_cancel(snap.key)))
+    if snap.status in ("done", "error", "cancelled"):
+        # terminal states only — a paused run keeps progress and must not be
+        # one misclick away from vanishing
+        actions.append(ft.TextButton(i18n.t("dash.dismiss"),
+                       on_click=lambda e: on_dismiss(snap.key)))
+
+    items: list[ft.Control] = [
+        ft.Text(snap.title, size=14, weight=ft.FontWeight.W_600),
+        field(i18n.t("plan.folder"), folder),
+        field(i18n.t("plan.messages"), counter),
+        field("", ft.Container(content=bar, expand=True)),
+        ft.Text(i18n.t(f"status.{snap.status}"), size=12, color=muted),
+        ft.Divider(height=1, color=_hairline()),
+    ]
+    if config:
+        src, dst = config.get("src", {}), config.get("dst", {})
+        items += [
+            field(i18n.t("panel.source"),
+                  ft.Text(f"{src.get('host', '')}:{src.get('port', '')}", size=13)),
+            field(i18n.t("panel.dest"),
+                  ft.Text(f"{dst.get('host', '')}:{dst.get('port', '')}", size=13)),
+            ft.TextButton(i18n.t("detail.edit"), on_click=lambda e: on_edit()),
+            ft.Divider(height=1, color=_hairline()),
+        ]
+    if snap.error_message:
+        items.append(ft.Text(snap.error_message, size=12, color=ft.Colors.RED_400))
+    items.append(ft.Row(actions, wrap=True, spacing=6))
+    return ft.Container(
+        width=300,
+        padding=ft.Padding(14, 12, 14, 12),
+        content=ft.Column(items, spacing=10, scroll=ft.ScrollMode.AUTO),
+    )
+
+
+def build_main(
+    i18n: I18n,
+    snapshots: list[RunSnapshot],
+    selected_key: str | None,
+    config: dict | None,
+    on_select: Callable[[str], None],
+    on_pause: Callable[[str], None],
+    on_resume: Callable[[str], None],
+    on_cancel: Callable[[str], None],
+    on_dismiss: Callable[[str], None],
+    on_edit: Callable[[], None],
+    refs: dict,
+) -> ft.View:
+    """The single master-detail window body: run list left, properties right."""
+    selected = next((s for s in snapshots if s.key == selected_key), None)
+    panel = build_side_panel(i18n, selected, config, on_pause, on_resume,
+                             on_cancel, on_dismiss, on_edit, refs)
+    body = ft.Row(
+        [
+            build_run_list(i18n, snapshots, selected_key, on_select, refs),
+            ft.Container(width=1, bgcolor=_hairline()),
+            panel,
+        ],
+        spacing=0,
+        expand=True,
+        vertical_alignment=ft.CrossAxisAlignment.START,
+    )
+    return ft.View(route="/", controls=[body], padding=0, spacing=0)
+
+
+def apply_main_values(refs: dict, snapshots: list[RunSnapshot], i18n: I18n,
+                      selected_key: str | None = None) -> None:
+    """In-place progress refresh for the main view (same contract as
+    apply_dashboard_values: only values change, controls stay)."""
+    for snap in snapshots:
+        entry = refs.get(snap.key)
+        if not entry:
+            continue
+        pct = (snap.processed / snap.total) if snap.total else None
+        entry["bar"].value = pct
+        entry["counter"].value = (
+            f"{snap.processed} / {snap.total}" if snap.total else str(snap.processed)
+        )
+        if snap.key == selected_key and "_panel" in refs:
+            panel = refs["_panel"]
+            panel["bar"].value = pct
+            panel["counter"].value = f"{snap.processed} / {snap.total}"
+            panel["folder"].value = snap.current_folder or ""
