@@ -89,7 +89,45 @@ jobs:
               *) echo "removing external symlink: $link -> $resolved"; rm "$link";;
             esac
           done
-          codesign --force --deep --options runtime --timestamp \
+          # Notarization scans EVERY Mach-O in the bundle — including inside
+          # the flutter asset app.zip (the packaged Python app), the embedded
+          # python.bundle stdlib and the Python.framework dylibs, none of
+          # which `codesign --deep` reaches. Sign inside-out, explicitly.
+          sign_binary() {
+            codesign --force --options runtime --timestamp -s "$IDENTITY" "$1"
+          }
+          sign_all_machos_under() {
+            find "$1" -type f | while read -r f; do
+              if file -b "$f" | grep -q "Mach-O"; then
+                echo "signing: $f"
+                sign_binary "$f"
+              fi
+            done
+          }
+          # 1) app.zip: unpack, sign, repack (zipfile keeps relative paths).
+          APPZIP=$(find "$APP" -path "*/flutter_assets/app/app.zip")
+          UNPACK=appzip-unpacked
+          mkdir "$UNPACK" && unzip -qq "$APPZIP" -d "$UNPACK"
+          sign_all_machos_under "$UNPACK"
+          rm "$APPZIP"
+          python3 - "$UNPACK" "$APPZIP" <<'PY'
+          import os, sys, zipfile
+          src, out = sys.argv[1], sys.argv[2]
+          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+              for root, dirs, files in os.walk(src):
+                  for name in files:
+                      p = os.path.join(root, name)
+                      z.write(p, os.path.relpath(p, src))
+          PY
+          rm -rf "$UNPACK"
+          # 2) every loose Mach-O in the bundle (python.bundle stdlib .so files,
+          #    Python.framework dylibs, plugin dylibs, helper executables).
+          sign_all_machos_under "$APP/Contents/Frameworks"
+          # 3) the frameworks themselves, then the app, inside-out.
+          for fw in "$APP"/Contents/Frameworks/*.framework; do
+            codesign --force --options runtime --timestamp -s "$IDENTITY" "$fw"
+          done
+          codesign --force --options runtime --timestamp \
             --entitlements packaging/macos-entitlements.plist \
             -s "$IDENTITY" "$APP"
           codesign --verify --deep --strict "$APP"
