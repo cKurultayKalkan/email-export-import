@@ -10,6 +10,9 @@ flags, original dates, and attachments preserved.**
 [![Latest release](https://img.shields.io/github/v/release/cKurultayKalkan/email-export-import?label=release)](https://github.com/cKurultayKalkan/email-export-import/releases/latest)
 [![Build](https://img.shields.io/github/actions/workflow/status/cKurultayKalkan/email-export-import/build-gui.yml?label=build)](https://github.com/cKurultayKalkan/email-export-import/actions/workflows/build-gui.yml)
 [![Downloads](https://img.shields.io/github/downloads/cKurultayKalkan/email-export-import/total)](https://github.com/cKurultayKalkan/email-export-import/releases)
+[![Stars](https://img.shields.io/github/stars/cKurultayKalkan/email-export-import?style=flat)](https://github.com/cKurultayKalkan/email-export-import/stargazers)
+[![Forks](https://img.shields.io/github/forks/cKurultayKalkan/email-export-import?style=flat)](https://github.com/cKurultayKalkan/email-export-import/forks)
+[![Contributors](https://img.shields.io/github/contributors/cKurultayKalkan/email-export-import)](https://github.com/cKurultayKalkan/email-export-import/graphs/contributors)
 ![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 
@@ -59,6 +62,8 @@ Courier/`INBOX.` namespaces, app-password-only logins).
 - [Performance](#performance)
 - [Security](#security)
 - [How it works](#how-it-works)
+- [Support](#support)
+- [Contributors](#contributors)
 - [Development](#development)
 
 ---
@@ -298,6 +303,21 @@ A migration copies each folder by fetching cheap metadata for the whole folder
 once, then streaming message bodies one at a time (so a 50 MB attachment costs
 50 MB of memory, not the whole folder), appending each verbatim with its flags
 and date, and recording it in the resume state before moving on.
+
+## Support
+
+- **Community support** — questions and bug reports are welcome on the
+  [issue tracker](https://github.com/cKurultayKalkan/email-export-import/issues).
+- **Premium / professional support** — need a whole company mailbox fleet
+  migrated, provider-specific troubleshooting, or custom integration work?
+  Reach the author at **[kurultay.co](https://kurultay.co)**.
+
+## Contributors
+
+[![Contributors](https://contrib.rocks/image?repo=cKurultayKalkan/email-export-import)](https://github.com/cKurultayKalkan/email-export-import/graphs/contributors)
+
+Contributions follow TDD — see [Development](#development). This section and
+the badges above update automatically as the project grows.
 
 ## Development
 
