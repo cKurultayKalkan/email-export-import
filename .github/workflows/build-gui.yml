@@ -46,7 +46,11 @@ jobs:
           # gets SIGPIPE when flet exits; disable pipefail so the step's result
           # is flet build's exit code, not yes's broken pipe.
           set +o pipefail
-          yes | uv run flet build ${{ matrix.target }} --project email-export-import
+          # --exclude keeps the repo's working files out of the packaged
+          # app.zip: without it the whole directory ships — .venv (a second,
+          # wrong-version Python), .git (the entire history), tests, docs.
+          yes | uv run flet build ${{ matrix.target }} --project email-export-import \
+            --exclude .venv .git .github .superpowers .pytest_cache tests docs packaging
       # ---- macOS code signing + notarization (skipped when secrets are absent,
       # e.g. on forks — the build then ships ad-hoc-signed, exactly as before).
       - name: Import signing certificate

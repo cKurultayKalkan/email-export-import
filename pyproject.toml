@@ -7,6 +7,10 @@ dependencies = [
     "imapclient>=3.0",
     "typer>=0.12",
     "rich>=13.7",
+    # The flet-build bootstrap does `import certifi` before starting the app,
+    # but nothing else pulls it in — without this line the packaged desktop
+    # app dies at startup with ModuleNotFoundError: certifi.
+    "certifi",
 ]
 
 [project.scripts]
