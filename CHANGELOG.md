@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.6 — 2026-07-13
+
+### Changed
+- **New app icon**: an email envelope with export/import arrows replaces the
+  default Flet icon on every platform.
+- **New product name**: the app is now called **Email Export Import Tool**
+  (bundle name and window title, in every language).
+
 ## v0.1.5 — 2026-07-13
 
 ### Fixed
