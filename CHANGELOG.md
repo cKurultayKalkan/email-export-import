@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.9 — 2026-07-13
+
+### Changed
+- **macOS builds are now code-signed and notarized.** CI signs every embedded
+  binary with a Developer ID certificate (hardened runtime) and staples
+  Apple's notarization ticket, so the download opens with no "damaged" /
+  Gatekeeper warning — no `xattr` workaround needed. Windows builds remain
+  unsigned for now (SmartScreen still warns once).
+
 ## v0.1.8 — 2026-07-13
 
 ### Added

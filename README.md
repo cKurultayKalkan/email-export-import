@@ -82,20 +82,12 @@ if you prefer no installer. **Extract the whole zip first** — running the exe
 from inside the zip window (or copying it out alone) leaves its DLLs behind and
 Windows reports "DLL not found".
 
-**First launch — the "unknown developer" warning.** The bundles are not
-code-signed yet, so your OS will warn you once:
+**First launch.**
 
-- **macOS**: right-click the app → **Open** → **Open**. If macOS still blocks
-  it ("cannot be opened" / "damaged"), open **System Settings → Privacy &
-  Security** and click **Open Anyway**, or clear the quarantine flag in
-  Terminal:
-
-  ```bash
-  xattr -dr com.apple.quarantine /Applications/email-export-import.app
-  ```
-
-- **Windows**: SmartScreen shows "Windows protected your PC" — click
-  **More info → Run anyway**.
+- **macOS**: opens with no warnings — the app is code-signed and notarized by
+  Apple (from v0.1.9 on).
+- **Windows**: the installer is not code-signed yet, so SmartScreen shows
+  "Windows protected your PC" once — click **More info → Run anyway**.
 - **Linux**: no warning; if the file isn't executable, `chmod +x` it. Requires
   GTK 3 (preinstalled on most desktops).
 
@@ -201,9 +193,10 @@ The desktop app is a **dashboard of migrations**, not a one-shot wizard:
 The desktop app reads and writes the **same state files as the CLI**, so the two
 are interchangeable mid-migration.
 
-> Packaged bundles are built unsigned by CI on every tag push and attached to
-> the [release](https://github.com/cKurultayKalkan/email-export-import/releases);
-> signing/notarization is a separate release step.
+> Packaged bundles are built by CI on every tag push and attached to the
+> [release](https://github.com/cKurultayKalkan/email-export-import/releases).
+> macOS bundles are code-signed and notarized; Windows bundles are unsigned
+> for now.
 
 ## What gets preserved
 
