@@ -385,3 +385,20 @@ def test_default_workers_follows_the_setting_and_halves_when_busy(monkeypatch):
 
     m2 = RunManager(workers=4)
     assert m2.default_workers() == 2, "a live run halves the per-run default"
+
+
+def test_cancel_on_inactive_placeholder_marks_cancelled(tmp_path):
+    # A paused (not yet resumed) run has no worker thread; cancel must still
+    # take effect immediately instead of leaving the status stuck on paused.
+    from email_export_import.state import MigrationState
+    from email_export_import.gui.run_manager import Run
+
+    s = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+    s.set_config({"src": {"email": "a@x"}, "dst": {"email": "b@y"}, "total": 9})
+    s.mark_migrated("INBOX", "<m@x>", 1)
+    s.flush()
+    run = Run.placeholder(MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path),
+                          state_dir=tmp_path)
+    assert run.snapshot().status == "paused"
+    run.cancel()
+    assert run.snapshot().status == "cancelled"

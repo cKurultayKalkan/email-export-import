@@ -82,6 +82,20 @@ def _page_main(page: ft.Page) -> None:
         except RuntimeError:
             pass  # page closed / control unmounted
 
+    # All dialogs go through these wrappers so the poll knows when a modal
+    # is open: its 5x/second page.update() must pause then, or it races the
+    # dialog's own click handling and the buttons feel dead.
+    dialog_open = [0]
+
+    def show_dialog(dlg) -> None:
+        dialog_open[0] += 1
+        page.show_dialog(dlg)
+
+    def pop_dialog() -> None:
+        if dialog_open[0] > 0:
+            dialog_open[0] -= 1
+        page.pop_dialog()
+
     # Blocking-work indicator: a dimmed full-page layer with a centred spinner.
     # Connecting/planning against a rate-limiting server can take many seconds
     # (login backoff), and without this the app just looks frozen.
@@ -244,17 +258,17 @@ def _page_main(page: ft.Page) -> None:
             return
 
         def confirm(_e=None) -> None:
-            page.pop_dialog()
+            pop_dialog()
             run.cancel()
             refresh_current()
 
-        page.show_dialog(
+        show_dialog(
             ft.AlertDialog(
                 modal=True,
                 title=ft.Text(i18n.t("cancel.confirm_title")),
                 content=ft.Text(i18n.t("cancel.confirm_body")),
                 actions=[
-                    ft.TextButton(i18n.t("cancel.confirm_no"), on_click=lambda e: page.pop_dialog()),
+                    ft.TextButton(i18n.t("cancel.confirm_no"), on_click=lambda e: pop_dialog()),
                     ft.FilledButton(i18n.t("cancel.confirm_yes"), on_click=confirm),
                 ],
             )
@@ -273,7 +287,7 @@ def _page_main(page: ft.Page) -> None:
         cfg = run.state.config or {}
 
         def submit(src_pw: str, dst_pw: str) -> None:
-            page.pop_dialog()
+            pop_dialog()
             # Reconnecting + reading folders can take a while on a slow or
             # rate-limiting server — show the spinner so it never looks frozen.
             show_loading(True, i18n.t("account.testing"))
@@ -283,8 +297,8 @@ def _page_main(page: ft.Page) -> None:
                 on_error=ui(lambda exc: _show_error(str(exc))),
             )
 
-        page.show_dialog(
-            views.build_password_dialog(i18n, run.title, submit, lambda: page.pop_dialog())
+        show_dialog(
+            views.build_password_dialog(i18n, run.title, submit, lambda: pop_dialog())
         )
 
     def _reconnect_and_build(cfg: dict, src_pw: str, dst_pw: str):
@@ -344,7 +358,7 @@ def _page_main(page: ft.Page) -> None:
 
     def _show_error(message: str) -> None:
         show_loading(False)  # any failed transition must drop the spinner
-        page.show_dialog(
+        show_dialog(
             ft.AlertDialog(title=ft.Text(i18n.t("status.error")), content=ft.Text(message))
         )
 
@@ -360,25 +374,25 @@ def _page_main(page: ft.Page) -> None:
         )
 
     def _on_update_checked(info, manual: bool) -> None:
-        page.pop_dialog()  # clear the "checking…" dialog if it was shown
+        pop_dialog()  # clear the "checking…" dialog if it was shown
         if info is None:
             if manual:
                 _info_dialog(i18n.t("update.up_to_date"))
             return
-        page.show_dialog(
+        show_dialog(
             ft.AlertDialog(
                 modal=True,
                 title=ft.Text(i18n.t("app.title")),
                 content=ft.Text(i18n.t("update.available", version=info.version)),
                 actions=[
-                    ft.TextButton(i18n.t("update.later"), on_click=lambda e: page.pop_dialog()),
+                    ft.TextButton(i18n.t("update.later"), on_click=lambda e: pop_dialog()),
                     ft.FilledButton(i18n.t("update.now"), on_click=lambda e: _do_update(info)),
                 ],
             )
         )
 
     def _do_update(info) -> None:
-        page.pop_dialog()
+        pop_dialog()
         _info_dialog(i18n.t("update.downloading"))
         run_async(
             lambda: updater.download_asset(info, Path.home() / "Downloads"),
@@ -395,12 +409,12 @@ def _page_main(page: ft.Page) -> None:
         _info_dialog(i18n.t("update.ready"))
 
     def _info_dialog(message: str) -> None:
-        page.pop_dialog()  # never stack over a previous update dialog
-        page.show_dialog(
+        pop_dialog()  # never stack over a previous update dialog
+        show_dialog(
             ft.AlertDialog(
                 title=ft.Text(i18n.t("app.title")),
                 content=ft.Text(message),
-                actions=[ft.TextButton(i18n.t("update.close"), on_click=lambda e: page.pop_dialog())],
+                actions=[ft.TextButton(i18n.t("update.close"), on_click=lambda e: pop_dialog())],
             )
         )
 
@@ -423,10 +437,10 @@ def _page_main(page: ft.Page) -> None:
             cfg["dst"] = dst_collect()
             run.state.set_config(cfg)
             run.state.flush()
-            page.pop_dialog()
+            pop_dialog()
             show_dashboard()
 
-        page.show_dialog(
+        show_dialog(
             ft.AlertDialog(
                 modal=True,
                 title=ft.Text(i18n.t("detail.edit")),
@@ -436,7 +450,7 @@ def _page_main(page: ft.Page) -> None:
                 ),
                 actions=[
                     ft.TextButton(i18n.t("resume.cancel"),
-                                  on_click=lambda e: page.pop_dialog()),
+                                  on_click=lambda e: pop_dialog()),
                     ft.FilledButton(i18n.t("detail.save"), on_click=save),
                 ],
             )
@@ -463,6 +477,11 @@ def _page_main(page: ft.Page) -> None:
             await asyncio.sleep(0.2)
             try:
                 pump_bulk()  # start queued bulk accounts as slots free (on-loop)
+                if dialog_open[0]:
+                    # A modal dialog is up: pushing page.update() 5x/second
+                    # races the dialog's own click round-trips and its buttons
+                    # go dead. Progress can wait until the dialog closes.
+                    continue
                 if not page.views:
                     continue
                 route = page.views[-1].route
@@ -543,7 +562,7 @@ def _page_main(page: ft.Page) -> None:
 
         def _cert_dialog(account: Account) -> None:
             def retry_unverified(e) -> None:
-                page.pop_dialog()
+                pop_dialog()
                 account.verify_ssl = False
                 on_test(account)  # async again — no UI freeze
 
@@ -552,11 +571,11 @@ def _page_main(page: ft.Page) -> None:
                 title=ft.Text(i18n.t("cert.title")),
                 content=ft.Text(i18n.t("cert.body")),
                 actions=[
-                    ft.TextButton(i18n.t("cert.cancel"), on_click=lambda e: page.pop_dialog()),
+                    ft.TextButton(i18n.t("cert.cancel"), on_click=lambda e: pop_dialog()),
                     ft.FilledButton(i18n.t("cert.continue"), on_click=retry_unverified),
                 ],
             )
-            page.show_dialog(dialog)
+            show_dialog(dialog)
 
         def on_back() -> None:
             back_to_dashboard() if role == "source" else go_account("source")
@@ -741,12 +760,12 @@ def _page_main(page: ft.Page) -> None:
         page.run_task(page.window.destroy)
 
     def _close_to_background(_e=None) -> None:
-        page.pop_dialog()
+        pop_dialog()
         page.window.minimized = True
         page.update()
 
     def _close_and_quit(_e=None) -> None:
-        page.pop_dialog()
+        pop_dialog()
         _quit_app()
 
     def request_quit() -> None:
@@ -755,7 +774,7 @@ def _page_main(page: ft.Page) -> None:
         if not _work_pending():
             _quit_app()
             return
-        page.show_dialog(
+        show_dialog(
             ft.AlertDialog(
                 modal=True,
                 title=ft.Text(i18n.t("close.confirm_title")),
@@ -809,7 +828,7 @@ def _page_main(page: ft.Page) -> None:
     # ---- menu bar ---------------------------------------------------------
 
     def _show_about() -> None:
-        page.show_dialog(
+        show_dialog(
             ft.AlertDialog(
                 title=ft.Text(i18n.t("app.title")),
                 content=ft.Text(i18n.t("about.body", version=__version__)),
@@ -821,7 +840,7 @@ def _page_main(page: ft.Page) -> None:
                         ),
                     ),
                     ft.TextButton(
-                        i18n.t("update.close"), on_click=lambda e: page.pop_dialog()
+                        i18n.t("update.close"), on_click=lambda e: pop_dialog()
                     ),
                 ],
             )

@@ -1014,11 +1014,15 @@ def build_run_list(
         ))
     for snap in snapshots:
         pct = (snap.processed / snap.total) if snap.total else None
-        bar = ft.ProgressBar(
-            value=pct, height=3, bgcolor=_hairline(),
-        ) if snap.status in ("running", "paused", "queued") or (
-            snap.total and snap.processed < snap.total
-        ) else ft.ProgressBar(value=1.0, height=3, bgcolor=_hairline())
+        # Never an indeterminate (value=None) bar on an inactive row: old
+        # state files can lack a total, and the endless sweep reads as a
+        # stuck "connecting" animation. Only a genuinely running row with an
+        # unknown total may animate.
+        if pct is None:
+            pct = None if snap.status == "running" else (
+                1.0 if snap.status == "done" else 0.0
+            )
+        bar = ft.ProgressBar(value=pct, height=3, bgcolor=_hairline())
         status_text = ft.Text(i18n.t(f"status.{snap.status}"), size=12,
                               color=ft.Colors.with_opacity(0.7, ft.Colors.ON_SURFACE))
         counter = ft.Text(
@@ -1072,8 +1076,13 @@ def build_side_panel(
             content=ft.Text(i18n.t("panel.none"), size=13, color=muted),
         )
     pct = (snap.processed / snap.total) if snap.total else None
+    if pct is None and snap.status != "running":
+        pct = 1.0 if snap.status == "done" else 0.0
     bar = ft.ProgressBar(value=pct, height=6, bgcolor=_hairline())
-    counter = ft.Text(f"{snap.processed} / {snap.total}", size=13)
+    counter = ft.Text(
+        f"{snap.processed} / {snap.total}" if snap.total else str(snap.processed),
+        size=13,
+    )
     folder = ft.Text(snap.current_folder or "", size=13)
     refs["_panel"] = {"bar": bar, "counter": counter, "folder": folder}
 
@@ -1169,12 +1178,15 @@ def apply_main_values(refs: dict, snapshots: list[RunSnapshot], i18n: I18n,
         if not entry:
             continue
         pct = (snap.processed / snap.total) if snap.total else None
+        if pct is None and snap.status != "running":
+            pct = 1.0 if snap.status == "done" else 0.0
         entry["bar"].value = pct
-        entry["counter"].value = (
+        counter_text = (
             f"{snap.processed} / {snap.total}" if snap.total else str(snap.processed)
         )
+        entry["counter"].value = counter_text
         if snap.key == selected_key and "_panel" in refs:
             panel = refs["_panel"]
             panel["bar"].value = pct
-            panel["counter"].value = f"{snap.processed} / {snap.total}"
+            panel["counter"].value = counter_text
             panel["folder"].value = snap.current_folder or ""

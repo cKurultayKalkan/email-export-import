@@ -92,3 +92,27 @@ def test_main_view_composes_list_and_panel():
     texts = _texts(view)
     assert EN.t("dash.heading") in texts  # list header
     assert "a" in refs and "_panel" in refs
+
+
+def test_run_list_bar_never_indeterminate_for_inactive_rows():
+    # total=0 (old state files) used to produce ProgressBar(value=None) — an
+    # endlessly sweeping "connecting" animation on a paused row.
+    refs: dict = {}
+    views.build_run_list(
+        EN, [RunSnapshot(key="a", title="t", status="paused", processed=19282,
+                         total=0, current_folder=None)],
+        selected_key=None, on_select=noop, refs=refs,
+    )
+    assert refs["a"]["bar"].value is not None
+
+
+def test_side_panel_counter_without_total_is_not_slash_zero():
+    refs: dict = {}
+    panel = views.build_side_panel(
+        EN, RunSnapshot(key="a", title="t", status="paused", processed=19282,
+                        total=0, current_folder=None),
+        config=None, on_pause=noop, on_resume=noop, on_cancel=noop,
+        on_dismiss=noop, on_edit=noop, refs=refs,
+    )
+    assert refs["_panel"]["counter"].value == "19282"
+    assert refs["_panel"]["bar"].value is not None
