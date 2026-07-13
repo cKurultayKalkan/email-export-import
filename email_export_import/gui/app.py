@@ -160,17 +160,17 @@ def _page_main(page: ft.Page) -> None:
         from ..state import DEFAULT_BASE_DIR
 
         page.views.clear()
-        page.views.append(
-            views.build_settings(
-                i18n, str(DEFAULT_BASE_DIR), on_locale=set_locale,
-                on_back=show_dashboard, version=__version__,
-                on_check_update=lambda: _check_updates(manual=True),
-                max_active=manager.max_active, on_max_active=set_max_active,
-                workers=manager.workers, on_workers=set_workers,
-                rate_limit=manager.rate_limit, on_rate_limit=set_rate_limit,
-                on_safe_mode=safe_mode, tso_on=sysinfo.tso_enabled(),
-            )
+        view = views.build_settings(
+            i18n, str(DEFAULT_BASE_DIR), on_locale=set_locale,
+            on_back=show_dashboard, version=__version__,
+            on_check_update=lambda: _check_updates(manual=True),
+            max_active=manager.max_active, on_max_active=set_max_active,
+            workers=manager.workers, on_workers=set_workers,
+            rate_limit=manager.rate_limit, on_rate_limit=set_rate_limit,
+            on_safe_mode=safe_mode, tso_on=sysinfo.tso_enabled(),
         )
+        view.controls.insert(0, _menubar())
+        page.views.append(view)
         page.update()
 
     def show_dashboard() -> None:
@@ -197,6 +197,7 @@ def _page_main(page: ft.Page) -> None:
         )
         render["dash_refs"] = refs
         render["dash_sig"] = views.dashboard_signature(snaps)
+        view.controls.insert(0, _menubar())
         return view
 
     def do_pause(key: str) -> None:
@@ -402,6 +403,15 @@ def _page_main(page: ft.Page) -> None:
         )
         render["detail_refs"] = refs
         render["detail_sig"] = views.detail_signature(snap)
+        # The Migration menu follows the run's state on this page.
+        extras: list = []
+        if snap.status == "running":
+            extras.append((i18n.t("dash.pause"), lambda: do_pause(snap.key)))
+        elif snap.status in ("paused", "cancelled"):
+            extras.append((i18n.t("dash.resume"), lambda: ask_resume(snap.key)))
+        elif snap.status == "done":
+            extras.append((i18n.t("dash.sync"), lambda: ask_resume(snap.key)))
+        view.controls.insert(0, _menubar(extras))
         return view
 
     def _enter_edit(key: str) -> None:
@@ -551,6 +561,7 @@ def _page_main(page: ft.Page) -> None:
 
         view, view_handles = views.build_account(i18n, role, initial, on_test, on_back, status)
         handles.update(view_handles)
+        view.controls.insert(0, _menubar())
         page.views.clear()
         page.views.append(view)
         page.update()
@@ -585,10 +596,14 @@ def _page_main(page: ft.Page) -> None:
 
         def _plan_view() -> ft.View:
             back = back_to_dashboard if ws.resume_key else (lambda: go_account("dest"))
-            return views.build_plan(
+            view = views.build_plan(
                 i18n, ws.plan, ws.skip, ws.workers, ws.spool,
                 on_toggle, on_workers, on_spool, start_migration, back,
             )
+            view.controls.insert(
+                0, _menubar([(i18n.t("plan.start"), start_migration)])
+            )
+            return view
 
         page.views.clear()
         page.views.append(_plan_view())
@@ -622,6 +637,7 @@ def _page_main(page: ft.Page) -> None:
 
     def show_bulk() -> None:
         view, _handles = views.build_bulk(i18n, on_start=start_bulk, on_back=back_to_dashboard)
+        view.controls.insert(0, _menubar())
         page.views.clear()
         page.views.append(view)
         page.update()
@@ -733,9 +749,9 @@ def _page_main(page: ft.Page) -> None:
         page.pop_dialog()
         _quit_app()
 
-    def _on_window_event(e) -> None:
-        if getattr(e, "type", None) != ft.WindowEventType.CLOSE:
-            return
+    def request_quit() -> None:
+        # Shared by the window close button and the menu's Quit: with work
+        # active, ask (background vs quit); idle, just quit.
         if not _work_pending():
             _quit_app()
             return
@@ -753,8 +769,43 @@ def _page_main(page: ft.Page) -> None:
             )
         )
 
+    def _on_window_event(e) -> None:
+        if getattr(e, "type", None) == ft.WindowEventType.CLOSE:
+            request_quit()
+
     page.window.prevent_close = True
     page.window.on_event = _on_window_event
+
+    # ---- menu bar ---------------------------------------------------------
+
+    def _show_about() -> None:
+        page.show_dialog(
+            ft.AlertDialog(
+                title=ft.Text(i18n.t("app.title")),
+                content=ft.Text(i18n.t("about.body", version=__version__)),
+                actions=[
+                    ft.TextButton(
+                        i18n.t("about.github"),
+                        on_click=lambda e: page.launch_url(
+                            "https://github.com/cKurultayKalkan/email-export-import"
+                        ),
+                    ),
+                    ft.TextButton(
+                        i18n.t("update.close"), on_click=lambda e: page.pop_dialog()
+                    ),
+                ],
+            )
+        )
+
+    def _menubar(migration_extras=None) -> ft.MenuBar:
+        return views.build_menubar(
+            i18n,
+            on_new=start_wizard, on_bulk=show_bulk, on_quit=request_quit,
+            on_dashboard=back_to_dashboard, on_settings=show_settings,
+            on_check_update=lambda: _check_updates(manual=True),
+            on_about=_show_about,
+            migration_extras=migration_extras,
+        )
 
     show_dashboard()
     page.run_task(poll)

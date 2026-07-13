@@ -810,3 +810,59 @@ def test_queued_bulk_work_counts_as_active(monkeypatch):
     _fire_close(page)
     assert page.dialog is not None, \
         "queued (bulk) work pending — close must ask, not quit"
+
+
+# ---- menu bar ---------------------------------------------------------------
+# Every screen carries the same top menu (Migration / View / Help); the
+# Migration menu additionally grows context items for the current page.
+
+def _menubar_of(view):
+    return next((c for c in view.controls if isinstance(c, ft.MenuBar)), None)
+
+
+def test_every_screen_has_the_menubar():
+    page = _run_page()
+    assert _menubar_of(page.views[-1]) is not None  # dashboard
+
+    assert _click(page.views[-1], EN("menu.settings")) or \
+        _click(page.views[-1], EN("nav.settings"))
+    assert page.views[-1].route == "/settings"
+    assert _menubar_of(page.views[-1]) is not None
+
+    assert _click(page.views[-1], EN("menu.new"))
+    assert page.views[-1].route == "/source"  # wizard starts at the source step
+    assert _menubar_of(page.views[-1]) is not None
+
+
+def test_menubar_routes_dashboard_bulk_and_updates(monkeypatch):
+    from email_export_import.gui import app as app_module
+
+    checked = []
+    monkeypatch.setattr(app_module.updater, "check_for_update",
+                        lambda *a, **k: checked.append(True) or None)
+    page = _run_page()
+    assert _click(page.views[-1], EN("menu.bulk"))
+    assert page.views[-1].route == "/bulk"
+    assert _click(page.views[-1], EN("menu.dashboard"))
+    assert page.views[-1].route == "/"
+    before = len(checked)
+    assert _click(page.views[-1], EN("settings.check_updates"))
+    assert _wait(lambda: len(checked) > before), "menu did not trigger update check"
+
+
+def test_menubar_about_dialog():
+    page = _run_page()
+    assert _click(page.views[-1], EN("menu.about"))
+    assert page.dialog is not None
+    assert "0." in _dialog_content(page.dialog)  # shows the version
+
+
+def test_menubar_quit_uses_the_close_guard(monkeypatch):
+    from email_export_import.gui.run_manager import RunManager
+
+    page = _run_page()
+    monkeypatch.setattr(RunManager, "snapshot_all",
+                        lambda self: [_fake_running_snapshot()])
+    assert _click(page.views[-1], EN("menu.quit"))
+    assert page.dialog is not None, "quit with active runs must ask first"
+    assert page.window.destroy_calls == 0

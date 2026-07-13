@@ -839,3 +839,44 @@ def build_password_dialog(
             ),
         ],
     )
+
+
+def build_menubar(
+    i18n: I18n,
+    on_new: Callable[[], None],
+    on_bulk: Callable[[], None],
+    on_quit: Callable[[], None],
+    on_dashboard: Callable[[], None],
+    on_settings: Callable[[], None],
+    on_check_update: Callable[[], None],
+    on_about: Callable[[], None],
+    migration_extras: list[tuple[str, Callable[[], None]]] | None = None,
+) -> ft.MenuBar:
+    """The top menu carried by every screen.
+
+    Migration / View / Help are constant; `migration_extras` prepends
+    page-specific actions (pause, resume, start…) to the Migration menu, so
+    the menu follows the screen the user is on."""
+
+    def item(label: str, handler: Callable[[], None]) -> ft.MenuItemButton:
+        return ft.MenuItemButton(content=label, on_click=lambda e: handler())
+
+    migration_items = [item(label, fn) for label, fn in (migration_extras or [])]
+    migration_items += [
+        item(i18n.t("menu.new"), on_new),
+        item(i18n.t("menu.bulk"), on_bulk),
+        item(i18n.t("menu.quit"), on_quit),
+    ]
+    return ft.MenuBar(
+        controls=[
+            ft.SubmenuButton(content=i18n.t("menu.migration"), controls=migration_items),
+            ft.SubmenuButton(content=i18n.t("menu.view"), controls=[
+                item(i18n.t("menu.dashboard"), on_dashboard),
+                item(i18n.t("nav.settings"), on_settings),
+            ]),
+            ft.SubmenuButton(content=i18n.t("menu.help"), controls=[
+                item(i18n.t("settings.check_updates"), on_check_update),
+                item(i18n.t("menu.about"), on_about),
+            ]),
+        ],
+    )
