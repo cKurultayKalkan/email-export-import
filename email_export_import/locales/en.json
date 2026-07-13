@@ -1,5 +1,5 @@
 {
-  "app.title": "Email Migrator",
+  "app.title": "Email Export Import Tool",
   "status.running": "Running",
   "status.queued": "Queued",
   "status.paused": "Paused",

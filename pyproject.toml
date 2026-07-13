@@ -28,7 +28,7 @@ packages = ["email_export_import"]
 
 # Desktop packaging (`flet build`). The app entry is the root main.py.
 [tool.flet]
-product = "Email Export-Import"
+product = "Email Export Import Tool"
 org = "com.ckurultaykalkan"
 
 [tool.flet.app]

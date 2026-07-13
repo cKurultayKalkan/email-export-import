@@ -1,5 +1,5 @@
 {
-  "app.title": "E-posta Taşıyıcı",
+  "app.title": "Email Export Import Tool",
   "status.running": "Çalışıyor",
   "status.queued": "Sırada",
   "status.paused": "Duraklatıldı",

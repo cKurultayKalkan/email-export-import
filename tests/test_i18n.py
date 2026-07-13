@@ -18,7 +18,9 @@ def test_t_translates_and_formats(tmp_path):
     i = I18n(locale="tr", prefs_path=tmp_path / "gui.json")
     en = I18n(locale="en", prefs_path=tmp_path / "gui.json")
     assert i.t("app.title") != ""
-    assert i.t("app.title") != en.t("app.title")  # actually translated
+    # app.title is the product name, intentionally identical in every locale —
+    # use a UI string to prove translations actually differ.
+    assert i.t("dash.heading") != en.t("dash.heading")
     assert "5" in en.t("plan.total", count=5)
 
 
