@@ -48,6 +48,7 @@ version = "0.1.9"
 source = { editable = "." }
 dependencies = [
     { name = "certifi" },
+    { name = "flet" },
     { name = "imapclient" },
     { name = "rich" },
     { name = "typer" },
@@ -66,6 +67,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "certifi" },
+    { name = "flet", specifier = ">=0.85,<0.86" },
     { name = "flet", marker = "extra == 'gui'", specifier = ">=0.85,<0.86" },
     { name = "imapclient", specifier = ">=3.0" },
     { name = "rich", specifier = ">=13.7" },

@@ -11,6 +11,11 @@ dependencies = [
     # but nothing else pulls it in — without this line the packaged desktop
     # app dies at startup with ModuleNotFoundError: certifi.
     "certifi",
+    # flet build bundles ONLY [project].dependencies into the app — an
+    # optional extra is invisible to it, and the packaged app then dies with
+    # ModuleNotFoundError: flet. Keep the version pinned in lockstep with the
+    # gui extra below.
+    "flet>=0.85,<0.86",
 ]
 
 [project.scripts]
