@@ -2,6 +2,31 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.11 — 2026-07-13
+
+### Changed
+- **Desktop redesign, part one.** The dashboard-of-cards and separate detail
+  page are replaced by a single desktop-style window: a dense migration list
+  on the left (status dot, account pair, live progress per row), a properties
+  panel for the selection on the right, a real menu bar (Migration / View /
+  Help), an icon toolbar whose middle group follows the selected run's state,
+  and a status bar (state left, version right). Settings now opens as a
+  modal dialog; editing a run's connection opens a dialog editor.
+- **Close truly backgrounds the app (macOS).** The close button hides every
+  window *and* the Dock icon; the app lives on as the envelope icon in the
+  menu bar (right side, near the clock) with a live status line, "Show
+  window" and a guarded Quit. Transfers keep running the whole time.
+- The macOS bundle is now named **Email Export Import Tool.app** (Finder
+  shows the file name, not the display name).
+
+### Fixed
+- Rows restored from old state files (no total recorded) showed an endless
+  "connecting"-style sweep animation and a `N / 0` counter.
+- Dialog buttons (e.g. the cancel confirmation) could be unresponsive while
+  live progress was updating: the 5x/second refresh now pauses whenever a
+  modal dialog is open.
+- Settings content scrolls on short windows instead of being cut off.
+
 ## v0.1.10 — 2026-07-13
 
 ### Fixed
