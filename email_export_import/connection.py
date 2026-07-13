@@ -32,6 +32,32 @@ SOCKET_TIMEOUT = 60
 # does, without hammering the server with further login attempts.
 AUTH_RETRY_SLEEPS = (30, 60, 120, 300)
 
+# Ceiling on the kernel's per-socket send buffer.
+#
+# Uploading a message hands its whole body to the socket in one call, and the
+# kernel is free to queue megabytes of it (macOS auto-tunes the send buffer up
+# to net.inet.tcp.autosndbufmax, 4 MB by default) and then build one enormous
+# mbuf chain out of that queue to hand to the NIC. Copying such a chain is what
+# panics the macOS send path under sustained bulk upload:
+#
+#     panic: m_copym_with_hdrs ... copy overflow @uipc_mbuf.c:3268
+#
+# Pinning SO_SNDBUF disables that auto-tuning, so the queue — and therefore the
+# chain built from it — stays bounded no matter how large the message is:
+# sendall() simply loops, pushing the body in buffer-sized pieces. It costs
+# nothing in practice (the destination server, not this buffer, is the
+# bottleneck) and removes the oversize condition on every platform, with no
+# root access and nothing for the user to configure.
+SEND_BUFFER_BYTES = 256 * 1024
+
+
+def _cap_send_buffer(client: IMAPClient, size: int = SEND_BUFFER_BYTES) -> None:
+    """Best-effort: never fail a connection over a tuning hint."""
+    try:
+        client.socket().setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, size)
+    except Exception:
+        pass
+
 
 class MailConnection:
     """Owns one IMAP session; reconnects and retries transient failures.
@@ -95,6 +121,7 @@ class MailConnection:
             raise ConnectionFailed(
                 f"Could not connect to {self.account.host}:{self.account.port} — {exc}"
             ) from exc
+        _cap_send_buffer(client)  # bound the kernel's send queue before any upload
         try:
             client.login(self.account.email, self.account.password)
         except LoginError as exc:

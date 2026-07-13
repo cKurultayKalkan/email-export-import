@@ -334,3 +334,45 @@ def test_no_jitter_is_exact(monkeypatch):
 
     conn.with_retry(once_fails)
     assert recorded == [1]  # exact, no jitter
+
+
+def test_connect_caps_the_kernel_send_buffer(monkeypatch):
+    """The kernel auto-grows a socket's send queue into the megabytes and builds
+    one huge mbuf chain from it — the condition that panics the macOS send path
+    under bulk upload. Pinning SO_SNDBUF disables that growth."""
+    import socket as socket_module
+
+    from email_export_import.connection import SEND_BUFFER_BYTES
+
+    calls = []
+
+    class SockSpy:
+        def setsockopt(self, level, opt, value):
+            calls.append((level, opt, value))
+
+    class ClientWithSocket(FakeIMAPClient):
+        def socket(self):
+            return SockSpy()
+
+    monkeypatch.setattr(
+        connection, "IMAPClient", lambda host, port=993, ssl=True, **kw: ClientWithSocket()
+    )
+    MailConnection(Account(host="h", port=993, ssl=True, email="a@x", password="p")).connect()
+
+    assert (socket_module.SOL_SOCKET, socket_module.SO_SNDBUF, SEND_BUFFER_BYTES) in calls
+
+
+def test_connect_survives_a_socket_that_rejects_tuning(monkeypatch):
+    """A tuning hint must never be able to fail a connection."""
+
+    class Hostile(FakeIMAPClient):
+        def socket(self):
+            raise OSError("no socket for you")
+
+    monkeypatch.setattr(
+        connection, "IMAPClient", lambda host, port=993, ssl=True, **kw: Hostile()
+    )
+    conn = MailConnection(
+        Account(host="h", port=993, ssl=True, email="a@x", password="p")
+    )
+    assert conn.connect() is not None  # connected anyway
