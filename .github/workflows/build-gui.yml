@@ -48,11 +48,33 @@ jobs:
         shell: bash
         run: |
           # shutil.make_archive is cross-platform — Windows Git Bash has no `zip`.
+          # The zips keep their exact names: pre-0.1.8 clients match them when
+          # auto-updating. New clients prefer the installer assets below.
           uv run python -c "import shutil; shutil.make_archive('email-export-import-${{ matrix.target }}', 'zip', 'build/${{ matrix.target }}')"
+      - name: Build macOS DMG
+        if: runner.os == 'macOS'
+        run: |
+          mkdir dmg-staging
+          cp -R build/macos/*.app dmg-staging/
+          ln -s /Applications dmg-staging/Applications
+          hdiutil create -volname "Email Export Import Tool" \
+            -srcfolder dmg-staging -ov -format UDZO \
+            email-export-import-macos.dmg
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          case "$VER" in *[!0-9.]*) VER="0.0.0";; esac   # non-tag runs (workflow_dispatch)
+          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" \
+            //DAppVersion="$VER" packaging/windows-installer.iss
       - uses: actions/upload-artifact@v4
         with:
           name: bundle-${{ matrix.target }}
-          path: email-export-import-${{ matrix.target }}.zip
+          path: |
+            email-export-import-${{ matrix.target }}.zip
+            email-export-import-macos.dmg
+            email-export-import-windows-setup.exe
 
   release:
     needs: build
@@ -66,11 +88,13 @@ jobs:
           pattern: bundle-*
           merge-multiple: true
       - name: Generate checksums
-        run: sha256sum email-export-import-*.zip > SHA256SUMS.txt
+        run: sha256sum email-export-import-* > SHA256SUMS.txt
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             email-export-import-*.zip
+            email-export-import-*.dmg
+            email-export-import-*-setup.exe
             SHA256SUMS.txt
           generate_release_notes: true

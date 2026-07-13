@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.8 — 2026-07-13
+
+### Added
+- **Proper installers.** Windows releases now ship
+  `email-export-import-windows-setup.exe` — a real installer (Start-menu
+  shortcut, uninstaller, in-place upgrades, English + Turkish) that ends the
+  "DLL not found" failures caused by running the exe outside its extracted
+  folder. macOS releases ship `email-export-import-macos.dmg` (open, drag to
+  Applications). The portable zips stay attached with unchanged names so
+  pre-0.1.8 auto-update keeps working; the in-app updater now prefers the
+  installer for its platform.
+
 ## v0.1.7 — 2026-07-13
 
 ### Added

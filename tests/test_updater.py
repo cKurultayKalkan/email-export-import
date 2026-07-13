@@ -41,6 +41,37 @@ def test_check_returns_info_when_newer(monkeypatch):
                               asset_name="email-export-import-macos.zip", sha256="abc123")
 
 
+def test_check_prefers_dmg_over_zip_on_macos(monkeypatch):
+    # v0.1.8+ ships proper installers next to the zips. New clients pick the
+    # installer; the zips stay so pre-0.1.8 clients (which match *-macos.zip)
+    # can still update.
+    monkeypatch.setattr(sys, "platform", "darwin")
+    release = _release("v0.2.0", [
+        _asset("email-export-import-macos.zip", "https://x/mac.zip"),
+        _asset("email-export-import-macos.dmg", "https://x/mac.dmg"),
+        _asset("SHA256SUMS.txt", "https://x/sums"),
+    ])
+    sums = ("abc123  email-export-import-macos.zip\n"
+            "ddd999  email-export-import-macos.dmg\n")
+    info = check_for_update("0.1.0", fetch=lambda url: release, fetch_text=lambda url: sums)
+    assert info.asset_name == "email-export-import-macos.dmg"
+    assert info.sha256 == "ddd999"
+
+
+def test_check_prefers_setup_exe_over_zip_on_windows(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    release = _release("v0.2.0", [
+        _asset("email-export-import-windows.zip", "https://x/win.zip"),
+        _asset("email-export-import-windows-setup.exe", "https://x/setup.exe"),
+        _asset("SHA256SUMS.txt", "https://x/sums"),
+    ])
+    sums = ("abc123  email-export-import-windows.zip\n"
+            "eee888  email-export-import-windows-setup.exe\n")
+    info = check_for_update("0.1.0", fetch=lambda url: release, fetch_text=lambda url: sums)
+    assert info.asset_name == "email-export-import-windows-setup.exe"
+    assert info.sha256 == "eee888"
+
+
 def test_check_none_when_up_to_date(monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
     release = _release("v0.1.0", [_asset("email-export-import-macos.zip"),

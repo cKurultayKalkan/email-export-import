@@ -73,9 +73,14 @@ and download the file for your system:
 
 | Your system | Download | Then |
 |---|---|---|
-| **macOS** | `email-export-import-macos.zip` | Unzip, drag `email-export-import.app` into **Applications**, open it |
-| **Windows** | `email-export-import-windows.zip` | Unzip the **whole folder**, then double-click `email-export-import.exe` inside it |
+| **macOS** | `email-export-import-macos.dmg` | Open it, drag the app into **Applications** |
+| **Windows** | `email-export-import-windows-setup.exe` | Run it — installs with a Start-menu shortcut and uninstaller |
 | **Linux** | `email-export-import-linux.zip` | Unzip, run the `email-export-import` executable inside |
+
+Portable zips (`-macos.zip`, `-windows.zip`) are also attached to every release
+if you prefer no installer. **Extract the whole zip first** — running the exe
+from inside the zip window (or copying it out alone) leaves its DLLs behind and
+Windows reports "DLL not found".
 
 **First launch — the "unknown developer" warning.** The bundles are not
 code-signed yet, so your OS will warn you once:

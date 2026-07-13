@@ -45,12 +45,17 @@ def is_newer(latest: str, current: str) -> bool:
     return parse_version(latest) > parse_version(current)
 
 
-def platform_asset_suffix() -> str:
+def platform_asset_suffixes() -> tuple[str, ...]:
+    """Asset name suffixes for this platform, most preferred first.
+
+    Proper installers (dmg / setup.exe) ship next to the plain zips from
+    v0.1.8 on; the zips must keep their exact names because pre-0.1.8
+    clients match them when updating."""
     if sys.platform == "darwin":
-        return "-macos.zip"
+        return ("-macos.dmg", "-macos.zip")
     if sys.platform == "win32":
-        return "-windows.zip"
-    return "-linux.zip"
+        return ("-windows-setup.exe", "-windows.zip")
+    return ("-linux.zip",)
 
 
 _ALLOWED_HOSTS = ("github.com", "api.github.com", "objects.githubusercontent.com")
@@ -106,8 +111,11 @@ def check_for_update(
         if not tag or not is_newer(tag, current_version):
             return None
         assets = release.get("assets", [])
-        suffix = platform_asset_suffix()
-        asset = next((a for a in assets if a.get("name", "").endswith(suffix)), None)
+        asset = next(
+            (a for suffix in platform_asset_suffixes()
+             for a in assets if a.get("name", "").endswith(suffix)),
+            None,
+        )
         sums = next((a for a in assets if a.get("name") == "SHA256SUMS.txt"), None)
         if asset is None or sums is None:
             return None
