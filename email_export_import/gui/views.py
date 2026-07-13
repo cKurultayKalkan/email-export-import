@@ -40,7 +40,7 @@ def build_settings(
     on_rate_limit: Callable[[int], None] | None = None,
     on_safe_mode: Callable[[], None] | None = None,
     tso_on: bool | None = None,
-) -> ft.View:
+) -> ft.AlertDialog:
     language = ft.Dropdown(
         label=i18n.t("settings.language"),
         value=i18n.locale,
@@ -77,7 +77,6 @@ def build_settings(
         on_select=lambda e: on_rate_limit(int(e.control.value)) if on_rate_limit else None,
     )
     controls: list[ft.Control] = [
-        ft.Text(i18n.t("settings.title"), size=20, weight=ft.FontWeight.BOLD),
         language,
         ft.Divider(),
         ft.Text(i18n.t("settings.load_title"), weight=ft.FontWeight.BOLD, size=13),
@@ -136,12 +135,20 @@ def build_settings(
         ft.Text(i18n.t("settings.data_location"), weight=ft.FontWeight.BOLD, size=13),
         ft.Text(data_dir, size=12, selectable=True),
         ft.Text(i18n.t("settings.data_note"), size=12),
-        ft.Row(
-            [ft.TextButton(i18n.t("detail.back"), on_click=lambda e: on_back())],
-            alignment=ft.MainAxisAlignment.END,
-        ),
     ]
-    return ft.View(route="/settings", controls=controls, padding=24, spacing=14)
+    # Desktop convention: settings live in a modal dialog, not a page.
+    return ft.AlertDialog(
+        modal=False,  # click-outside / Esc closes, like every settings dialog
+        title=ft.Text(i18n.t("settings.title")),
+        content=ft.Container(
+            width=460,
+            content=ft.Column(controls, spacing=12, tight=True,
+                              scroll=ft.ScrollMode.AUTO),
+        ),
+        actions=[
+            ft.TextButton(i18n.t("update.close"), on_click=lambda e: on_back()),
+        ],
+    )
 
 
 _CUSTOM_PRESET_KEY = "__custom__"

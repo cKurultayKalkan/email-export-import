@@ -148,7 +148,9 @@ def _page_main(page: ft.Page) -> None:
 
     def set_locale(locale: str) -> None:
         i18n.set_locale(locale)
-        show_settings()  # stay on settings, re-rendered in the new language
+        pop_dialog()
+        show_dashboard()  # chrome + rows in the new language
+        show_settings()   # reopen the dialog, re-rendered
 
     def set_max_active(n: int) -> None:
         manager.max_active = n
@@ -169,23 +171,21 @@ def _page_main(page: ft.Page) -> None:
         set_workers(1)
         set_max_active(1)
         set_rate_limit(2 * 1024 * 1024)
-        show_settings()  # re-render so the dropdowns show the new values
+        pop_dialog()
+        show_settings()  # reopen so the dropdowns show the new values
 
     def show_settings() -> None:
         from ..state import DEFAULT_BASE_DIR
 
-        page.views.clear()
-        view = views.build_settings(
+        show_dialog(views.build_settings(
             i18n, str(DEFAULT_BASE_DIR), on_locale=set_locale,
-            on_back=show_dashboard, version=__version__,
+            on_back=pop_dialog, version=__version__,
             on_check_update=lambda: _check_updates(manual=True),
             max_active=manager.max_active, on_max_active=set_max_active,
             workers=manager.workers, on_workers=set_workers,
             rate_limit=manager.rate_limit, on_rate_limit=set_rate_limit,
             on_safe_mode=safe_mode, tso_on=sysinfo.tso_enabled(),
-        )
-        page.views.append(_decorate(view))
-        page.update()
+        ))
 
     def show_dashboard() -> None:
         page.views.clear()

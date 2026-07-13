@@ -713,10 +713,12 @@ def test_settings_button_opens_settings_and_completed_card_shown(monkeypatch, tm
     assert EN("dash.sync") in labels  # the completed run's panel rendered
 
     assert _click(dash, EN("nav.settings")), "Settings button did nothing"
-    assert page.views[-1].route == "/settings"
-    # language + back present on settings
-    settings_labels = [lbl for lbl, _ in _clickables(page.views[-1])]
-    assert EN("detail.back") in settings_labels
+    # settings is a modal dialog now, closable with its Close action
+    assert page.dialog is not None
+    settings_labels = [lbl for lbl, _ in _clickables(page.dialog)]
+    assert EN("settings.check_updates") in settings_labels
+    assert _click(page.dialog, EN("update.close"))
+    assert page.dialog is None
 
 
 def test_update_banner_shown_when_newer_available(monkeypatch, tmp_path):
@@ -861,8 +863,8 @@ def test_every_screen_has_the_menubar():
 
     assert _click(page.views[-1], EN("menu.settings")) or \
         _click(page.views[-1], EN("nav.settings"))
-    assert page.views[-1].route == "/settings"
-    assert _menubar_of(page.views[-1]) is not None
+    assert page.dialog is not None  # settings opens as a dialog
+    assert _click(page.dialog, EN("update.close"))
 
     assert _click(page.views[-1], EN("menu.new"))
     assert page.views[-1].route == "/source"  # wizard starts at the source step

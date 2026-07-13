@@ -154,6 +154,11 @@ jobs:
             # shutil.make_archive is cross-platform — Windows Git Bash has no `zip`.
             uv run python -c "import shutil; shutil.make_archive('email-export-import-${{ matrix.target }}', 'zip', 'build/${{ matrix.target }}')"
           fi
+      - name: Rename macOS bundle to the product name
+        if: runner.os == 'macOS'
+        run: |
+          # Finder shows the bundle's FILE name, not CFBundleDisplayName.
+          mv build/macos/email-export-import.app "build/macos/Email Export Import Tool.app"
       - name: Build macOS DMG
         if: runner.os == 'macOS'
         run: |

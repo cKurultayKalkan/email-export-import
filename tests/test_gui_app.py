@@ -237,9 +237,10 @@ def test_build_settings_view():
 
     i18n = I18n(locale="en")
     noop = lambda *a, **k: None
-    view = views.build_settings(i18n, "/home/x/.email-export-import", noop, noop,
-                                version="1.2.3", on_check_update=noop)
-    assert view.route == "/settings"
+    dlg = views.build_settings(i18n, "/home/x/.email-export-import", noop, noop,
+                               version="1.2.3", on_check_update=noop)
+    import flet as ft
+    assert isinstance(dlg, ft.AlertDialog)  # settings is a dialog now
     labels = []
 
     def walk(c):
@@ -248,8 +249,10 @@ def test_build_settings_view():
             labels.append(v)
         for ch in getattr(c, "controls", []) or []:
             walk(ch)
-    for c in view.controls:
-        walk(c)
+        content = getattr(c, "content", None)
+        if content is not None and not isinstance(content, str):
+            walk(content)
+    walk(dlg.content)
     assert any("1.2.3" in x for x in labels)
     assert i18n.t("settings.check_updates") in labels
 
