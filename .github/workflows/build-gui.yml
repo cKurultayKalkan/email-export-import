@@ -73,6 +73,22 @@ jobs:
             | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)"/\1/')
           echo "Signing as: $IDENTITY"
           APP=$(echo build/macos/*.app)
+          # codesign rejects symlinks that are broken or that point outside
+          # the bundle (serious_python's framework ships some aimed at build
+          # machine paths). They are dead on any user machine — drop them.
+          APP_ABS=$(cd "$APP" && pwd)
+          find "$APP" -type l | while read -r link; do
+            if [ ! -e "$link" ]; then
+              echo "removing broken symlink: $link -> $(readlink "$link")"
+              rm "$link"
+              continue
+            fi
+            resolved=$(readlink -f "$link")
+            case "$resolved" in
+              "$APP_ABS"/*) ;;  # stays inside the bundle — keep
+              *) echo "removing external symlink: $link -> $resolved"; rm "$link";;
+            esac
+          done
           codesign --force --deep --options runtime --timestamp \
             --entitlements packaging/macos-entitlements.plist \
             -s "$IDENTITY" "$APP"
