@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.7 — 2026-07-13
+
+### Added
+- **Close-to-background**: closing the window while migrations are running (or
+  queued) no longer kills them. The app asks whether to keep working in the
+  background — it stays minimized in the Dock / task bar and clicking its icon
+  restores the window — or to quit (progress is saved either way; resuming
+  continues without duplicates). With nothing active, close quits as before.
+
 ## v0.1.6 — 2026-07-13
 
 ### Changed
