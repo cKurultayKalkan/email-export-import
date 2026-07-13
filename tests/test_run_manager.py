@@ -402,3 +402,44 @@ def test_cancel_on_inactive_placeholder_marks_cancelled(tmp_path):
     assert run.snapshot().status == "paused"
     run.cancel()
     assert run.snapshot().status == "cancelled"
+
+
+def test_failed_messages_do_not_produce_done(tmp_path, monkeypatch):
+    # THE silent-loss bug: a folder whose SELECT hiccuped landed in
+    # progress.failures, yet the run still reported "done" and the state was
+    # marked completed — 8 mails quietly missing behind a green tick.
+    from email_export_import.gui import run_manager as rm
+    from email_export_import.models import TransferProgress
+    from email_export_import.state import MigrationState
+    from tests.fakes import FakeIMAPClient
+    from email_export_import import connection
+
+    monkeypatch.setattr(connection, "IMAPClient",
+                        lambda host, port=993, ssl=True, **kw: FakeIMAPClient())
+
+    bad = TransferProgress()
+    bad.failed = 3
+    bad.failures = ["RESEPSIYON GUNC: SELECT failed"]
+    monkeypatch.setattr(rm, "migrate", lambda *a, **k: bad)
+
+    s = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
+    src = connection.MailConnection.__new__(connection.MailConnection)
+    run = rm.Run(key="k", title="t",
+                 src_conn=_conn("a@x"), dst_conn=_conn("b@y"),
+                 plans=[], state=s, workers=1, total=3, state_dir=tmp_path)
+    run.start()
+    run.join(timeout=5)
+    snap = run.snapshot()
+    assert snap.status == "error", "incomplete run must not be green"
+    assert "3" in (snap.error_message or "")
+    # and the state must stay resumable, not completed
+    assert MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path).status != "completed"
+
+
+def _conn(email):
+    from email_export_import import connection
+    from email_export_import.models import Account
+
+    return connection.MailConnection(
+        Account(host="h.test", port=993, ssl=True, email=email, password="p")
+    )

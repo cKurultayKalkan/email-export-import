@@ -23,10 +23,11 @@ class RunSnapshot:
     processed: int
     total: int
     current_folder: str | None
-    error_kind: str | None = None  # "quota" | "fatal"
+    error_kind: str | None = None  # "quota" | "fatal" | "incomplete"
     error_message: str | None = None
     result: TransferProgress | None = None
     spool_pending: int | None = None
+    duration_seconds: float | None = None  # first start → final completion
 
 
 class Run:
@@ -93,7 +94,11 @@ class Run:
             state_dir=state_dir,
         )
         run._status = "done" if state.status == "completed" else "paused"
-        run._processed = state.migrated_count()
+        # done_uids counts every handled message (migrated, deduplicated,
+        # already-there, vanished) — the honest numerator that converges on
+        # the plan total. migrated_count() undershoots by the skip margin and
+        # made complete runs look unfinished (e.g. 2611/2621).
+        run._processed = state.processed_count() or state.migrated_count()
         return run
 
     @property
@@ -121,6 +126,7 @@ class Run:
         # a completed session being synced for newly-arrived mail, so an
         # interrupted sync stays resumable instead of being filed as finished.
         self._state.reopen()
+        self._state.mark_started()  # opens the duration clock (idempotent)
         self._state.set_config(
             {
                 "src": _account_config(self._src_conn.account),
@@ -173,6 +179,16 @@ class Run:
                         self._status = "error"
                     elif self._cancel.is_set():
                         self._status = "paused" if self._pausing else "cancelled"
+                    elif result is not None and result.failed:
+                        # A run that finished with failures is NOT done —
+                        # messages are missing. Stay red and resumable instead
+                        # of hiding the loss behind a green tick.
+                        self._error = (
+                            "incomplete",
+                            f"{result.failed} messages were not transferred: "
+                            + "; ".join(result.failures[:3]),
+                        )
+                        self._status = "error"
                     else:
                         self._status = "done"
                 if self._status == "done":
@@ -228,6 +244,7 @@ class Run:
                 error_message=error_message,
                 result=self._result,
                 spool_pending=self._spool_pending,
+                duration_seconds=self._state.duration_seconds(),
             )
 
 

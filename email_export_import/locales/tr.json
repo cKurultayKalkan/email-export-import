@@ -129,6 +129,7 @@
   "tray.show": "Pencereyi göster",
   "status.ready": "Hazır",
   "panel.none": "Soldan bir taşıma seçin",
+  "panel.duration": "Süre",
   "panel.source": "Kaynak",
   "panel.dest": "Hedef",
   "tray.status": "{count} taşıma çalışıyor",

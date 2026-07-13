@@ -57,14 +57,17 @@ def _plan_units(
     state: MigrationState,
     progress: TransferProgress,
     on_message: MessageCallback | None = None,
-) -> list[tuple[FolderPlan, list[int]]]:
+) -> tuple[list[tuple[FolderPlan, list[int]]], dict[str, list[int]]]:
     """Serial planning pass: record UIDVALIDITY, create missing destination
     folders, and split every folder's *unfinished* UIDs into work units.
 
     A rejection here (e.g. namespace-invalid CREATE) fails this folder and
     moves on — one bad folder must not kill the whole run.
-    """
+
+    Also returns every folder's full searched UID list, so the end of the run
+    can prove nothing fell through (see _verify_complete)."""
     units: list[tuple[FolderPlan, list[int]]] = []
+    expected: dict[str, list[int]] = {}
     for plan in plans:
         try:
             info = src.select_folder(plan.source, readonly=True)
@@ -108,9 +111,10 @@ def _plan_units(
             else:
                 pending.append(uid)
 
+        expected[plan.source] = list(uids)
         for i in range(0, len(pending), CHUNK_SIZE):
             units.append((plan, pending[i : i + CHUNK_SIZE]))
-    return units
+    return units, expected
 
 
 def _process_unit(
@@ -125,6 +129,7 @@ def _process_unit(
     on_message: MessageCallback | None,
     spool: MessageSpool | None = None,
     throttle: RateLimiter | None = None,
+    failed_uids: set | None = None,
 ) -> None:
     """Migrate one chunk of UIDs. State and progress mutations are guarded by
     *lock*; network transfers run outside it so workers overlap on the wire."""
@@ -138,9 +143,11 @@ def _process_unit(
         m = meta.get(uid)
         if m is None:
             # Vanished between search() and fetch() (expunged mid-run):
-            # nothing to copy, but the message was processed — count and report it.
+            # nothing to copy, but the message was processed — record it so a
+            # resume never retries it and the completeness check passes.
             with lock:
                 progress.skipped += 1
+                state.mark_processed(plan.source, uid)
             if on_message is not None:
                 on_message(plan.source, uid)
             continue
@@ -195,6 +202,10 @@ def _process_unit(
                 progress.failures.append(
                     f"{plan.source} uid={uid} message_id={message_id}: {exc}"
                 )
+                if failed_uids is not None:
+                    # Already reported — the completeness check must not
+                    # count this UID a second time.
+                    failed_uids.add((plan.source, uid))
         else:
             with lock:
                 state.mark_migrated(plan.source, message_id, uid)
@@ -222,22 +233,27 @@ def migrate(
 ) -> TransferProgress:
     progress = TransferProgress()
     lock = threading.Lock()
+    failed_uids: set = set()
     stop = cancel if cancel is not None else threading.Event()
     # Make the planning pass and the serial path honour cancellation too (the
     # parallel workers build their own cancel-aware connections below).
     src.set_cancel(stop)
     dst.set_cancel(stop)
     try:
-        units = _plan_units(src, dst, plans, state, progress, on_message)
+        units, expected = _plan_units(src, dst, plans, state, progress, on_message)
         if not units:
+            if not stop.is_set():
+                _verify_complete(expected, state, progress)
             return progress
 
         if workers <= 1:
             for plan, uids in units:
                 _process_unit(
                     src, dst, plan, uids, state, progress, lock, stop, on_message,
-                    spool, throttle,
+                    spool, throttle, failed_uids,
                 )
+            if not stop.is_set():
+                _verify_complete(expected, state, progress, failed_uids)
             return progress
 
         # Each worker owns a private connection pair (IMAP sessions are not
@@ -260,7 +276,7 @@ def migrate(
                         return
                     _process_unit(
                         wsrc, wdst, plan, uids, state, progress, lock, stop, on_message,
-                        spool, throttle,
+                        spool, throttle, failed_uids,
                     )
             except Exception as exc:
                 stop.set()
@@ -284,6 +300,31 @@ def migrate(
             raise
         if errors:
             raise errors[0]
+        if not stop.is_set():
+            _verify_complete(expected, state, progress, failed_uids)
         return progress
     finally:
         state.flush()  # Ctrl-C / crash loses at most the in-flight messages
+
+
+def _verify_complete(
+    expected: dict[str, list[int]],
+    state: MigrationState,
+    progress: TransferProgress,
+    failed_uids: set | None = None,
+) -> None:
+    """Belt and braces before a run may call itself finished: every UID the
+    planning pass saw must be recorded as handled by now. Anything else means
+    messages fell through silently (a flaky SELECT, a dropped unit) — surface
+    them as failures so the run shows red instead of a lying green tick."""
+    reported = failed_uids or set()
+    for folder, uids in expected.items():
+        done = state.migrated_uids(folder)
+        missing = [
+            u for u in uids if u not in done and (folder, u) not in reported
+        ]
+        if missing:
+            progress.failed += len(missing)
+            progress.failures.append(
+                f"{folder}: {len(missing)} messages were never transferred"
+            )

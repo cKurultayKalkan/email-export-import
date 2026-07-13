@@ -24,6 +24,10 @@ class MigrationState:
         # so an interrupted run can be resumed without re-entering everything.
         self.config: dict | None = None
         self.status: str = "running"
+        # Wall-clock bookkeeping for the results view. Spans pauses: it is
+        # "first started" → "finally completed", not active transfer time.
+        self.started_at: float | None = None
+        self.finished_at: float | None = None
         if path.exists():
             raw = json.loads(path.read_text())
             for name, f in raw.get("folders", {}).items():
@@ -37,6 +41,8 @@ class MigrationState:
                 }
             self.config = raw.get("config")
             self.status = raw.get("status", "running")
+            self.started_at = raw.get("started_at")
+            self.finished_at = raw.get("finished_at")
 
     @classmethod
     def for_pair(
@@ -88,7 +94,22 @@ class MigrationState:
         self.config = config
 
     def mark_completed(self) -> None:
+        import time
+
         self.status = "completed"
+        self.finished_at = time.time()
+
+    def mark_started(self) -> None:
+        import time
+
+        if self.started_at is None:
+            self.started_at = time.time()
+        self.finished_at = None  # a re-run (sync/resume) reopens the clock
+
+    def duration_seconds(self) -> float | None:
+        if self.started_at is not None and self.finished_at is not None:
+            return max(0.0, self.finished_at - self.started_at)
+        return None
 
     def reopen(self) -> None:
         """Put a finished/cancelled session back in the running state.
@@ -107,6 +128,19 @@ class MigrationState:
         return sum(
             len(f["message_ids"]) + len(f["uids"]) for f in self._folders.values()
         )
+
+    def processed_count(self) -> int:
+        """Every UID handled (migrated, deduplicated, already-there, or
+        vanished). This is the honest progress numerator: it converges on the
+        plan total, where migrated_count() undershoots it by the dedup/skip
+        margin and reads as an unfinished run."""
+        return sum(len(f["done_uids"]) for f in self._folders.values())
+
+    def mark_processed(self, folder: str, uid: int) -> None:
+        """Record a UID that was handled without producing a migrated message
+        (e.g. expunged from the source mid-run): resumes must not retry it and
+        counters must include it."""
+        self._folder(folder)["done_uids"].add(uid)
 
     def _folder(self, folder: str) -> dict:
         return self._folders.setdefault(
@@ -169,6 +203,8 @@ class MigrationState:
             },
             "config": self.config,
             "status": self.status,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
         }
         tmp = self.path.with_suffix(".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

@@ -1136,6 +1136,23 @@ def build_side_panel(
             ft.TextButton(i18n.t("detail.edit"), on_click=lambda e: on_edit()),
             ft.Divider(height=1, color=_hairline()),
         ]
+    # Results block: what actually happened, in numbers the user can audit.
+    if snap.result is not None:
+        items += [
+            field(i18n.t("done.migrated"), ft.Text(str(snap.result.migrated), size=13)),
+            field(i18n.t("done.skipped"), ft.Text(str(snap.result.skipped), size=13)),
+        ]
+        if snap.result.failed:
+            items.append(field(i18n.t("done.failed"),
+                               ft.Text(str(snap.result.failed), size=13,
+                                       color=ft.Colors.RED_400)))
+            for line in snap.result.failures[:3]:
+                items.append(ft.Text(line, size=11, color=ft.Colors.RED_400))
+    if snap.duration_seconds is not None:
+        secs = int(snap.duration_seconds)
+        text = (f"{secs // 3600}h {secs % 3600 // 60}m" if secs >= 3600
+                else f"{secs // 60}m {secs % 60}s" if secs >= 60 else f"{secs}s")
+        items.append(field(i18n.t("panel.duration"), ft.Text(text, size=13)))
     if snap.error_message:
         items.append(ft.Text(snap.error_message, size=12, color=ft.Colors.RED_400))
     items.append(ft.Row(actions, wrap=True, spacing=6))

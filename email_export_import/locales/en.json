@@ -129,6 +129,7 @@
   "tray.show": "Show window",
   "status.ready": "Ready",
   "panel.none": "Select a migration on the left",
+  "panel.duration": "Duration",
   "panel.source": "Source",
   "panel.dest": "Destination",
   "tray.status": "{count} migrations running",
