@@ -21,6 +21,9 @@ jobs:
           - os: windows-latest
             target: windows
     runs-on: ${{ matrix.os }}
+    env:
+      # Secrets are not readable in step-level `if:` — surface presence here.
+      HAS_MACOS_CERT: ${{ secrets.MACOS_CERT_P12 != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
@@ -44,13 +47,55 @@ jobs:
           # is flet build's exit code, not yes's broken pipe.
           set +o pipefail
           yes | uv run flet build ${{ matrix.target }} --project email-export-import
+      # ---- macOS code signing + notarization (skipped when secrets are absent,
+      # e.g. on forks — the build then ships ad-hoc-signed, exactly as before).
+      - name: Import signing certificate
+        if: runner.os == 'macOS' && env.HAS_MACOS_CERT == 'true'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          echo "$MACOS_CERT_P12" | base64 --decode > cert.p12
+          security create-keychain -p ci-keychain build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p ci-keychain build.keychain
+          security import cert.p12 -k build.keychain -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci-keychain build.keychain >/dev/null
+          rm cert.p12
+      - name: Sign, notarize and staple the app
+        if: runner.os == 'macOS' && env.HAS_MACOS_CERT == 'true'
+        env:
+          APPSTORE_P8: ${{ secrets.APPSTORE_P8 }}
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+        run: |
+          IDENTITY=$(security find-identity -v -p codesigning build.keychain \
+            | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "Signing as: $IDENTITY"
+          APP=$(echo build/macos/*.app)
+          codesign --force --deep --options runtime --timestamp \
+            --entitlements packaging/macos-entitlements.plist \
+            -s "$IDENTITY" "$APP"
+          codesign --verify --deep --strict "$APP"
+          echo "$APPSTORE_P8" | base64 --decode > authkey.p8
+          ditto -c -k --keepParent "$APP" notarize.zip
+          xcrun notarytool submit notarize.zip --key authkey.p8 \
+            --key-id "$APPSTORE_KEY_ID" --issuer "$APPSTORE_ISSUER_ID" --wait
+          xcrun stapler staple "$APP"
+          rm authkey.p8 notarize.zip
       - name: Package bundle
         shell: bash
         run: |
-          # shutil.make_archive is cross-platform — Windows Git Bash has no `zip`.
           # The zips keep their exact names: pre-0.1.8 clients match them when
           # auto-updating. New clients prefer the installer assets below.
-          uv run python -c "import shutil; shutil.make_archive('email-export-import-${{ matrix.target }}', 'zip', 'build/${{ matrix.target }}')"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            # ditto preserves the signed bundle exactly (symlinks, resource
+            # forks); a Python zipfile archive can invalidate the signature.
+            ditto -c -k "build/macos" "email-export-import-macos.zip"
+          else
+            # shutil.make_archive is cross-platform — Windows Git Bash has no `zip`.
+            uv run python -c "import shutil; shutil.make_archive('email-export-import-${{ matrix.target }}', 'zip', 'build/${{ matrix.target }}')"
+          fi
       - name: Build macOS DMG
         if: runner.os == 'macOS'
         run: |
