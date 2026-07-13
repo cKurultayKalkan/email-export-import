@@ -118,6 +118,10 @@
   "settings.rate_limit_note": "Caps how fast messages are uploaded. Sustained full-speed transfer is what stresses a machine's network stack — lower this if transfers make your system unstable.",
   "settings.safe_mode": "Safe mode",
   "settings.safe_mode_note": "One connection, one transfer at a time, 2 MB/s. Slowest but gentlest.",
+  "close.confirm_title": "Migrations are still running",
+  "close.confirm_body": "The app can keep working in the background: it stays minimized in the Dock / task bar and you click its icon to bring the window back. If you quit instead, progress is saved — resuming later continues where it left off, without duplicates.",
+  "close.background": "Keep running in background",
+  "close.quit": "Quit",
   "settings.tso_title": "macOS network offload is on",
   "settings.tso_body": "Your Mac hands oversized blocks to the network card to split up (TSO). Sustained bulk upload with this enabled has been seen crashing the macOS kernel. Turning it off costs a little speed and reverts on reboot. Run in Terminal:"
 }

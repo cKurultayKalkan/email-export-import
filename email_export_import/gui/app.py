@@ -706,6 +706,56 @@ def _page_main(page: ft.Page) -> None:
             run.mark_failed(message)
         refresh_current()
 
+    # ---- close-to-background --------------------------------------------
+    # Closing the window while migrations are running (or queued) must not
+    # silently kill them. Intercept the close: offer to keep working
+    # minimized — the process stays alive in the Dock / task bar and clicking
+    # its icon restores the window. With nothing active, close just quits.
+    # (Hiding the window entirely is not an option: in Flet desktop the
+    # session dies as soon as window.visible goes False — minimize is the
+    # one background mode that keeps the engine running.)
+
+    def _work_pending() -> bool:
+        return any(
+            s.status in ("running", "stopping", "queued")
+            for s in manager.snapshot_all()
+        )
+
+    def _quit_app() -> None:
+        page.run_task(page.window.destroy)
+
+    def _close_to_background(_e=None) -> None:
+        page.pop_dialog()
+        page.window.minimized = True
+        page.update()
+
+    def _close_and_quit(_e=None) -> None:
+        page.pop_dialog()
+        _quit_app()
+
+    def _on_window_event(e) -> None:
+        if getattr(e, "type", None) != ft.WindowEventType.CLOSE:
+            return
+        if not _work_pending():
+            _quit_app()
+            return
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text(i18n.t("close.confirm_title")),
+                content=ft.Text(i18n.t("close.confirm_body")),
+                actions=[
+                    ft.TextButton(i18n.t("close.quit"), on_click=_close_and_quit),
+                    ft.FilledButton(
+                        i18n.t("close.background"), on_click=_close_to_background
+                    ),
+                ],
+            )
+        )
+
+    page.window.prevent_close = True
+    page.window.on_event = _on_window_event
+
     show_dashboard()
     page.run_task(poll)
     _check_updates(manual=False)

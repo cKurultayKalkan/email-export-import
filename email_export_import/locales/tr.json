@@ -118,6 +118,10 @@
   "settings.rate_limit_note": "Mesajların ne hızla yükleneceğini sınırlar. Bir makinenin ağ yığınını zorlayan şey, kesintisiz tam hızda aktarımdır — aktarım sırasında sisteminiz kararsızlaşıyorsa bunu düşürün.",
   "settings.safe_mode": "Güvenli mod",
   "settings.safe_mode_note": "Tek bağlantı, aynı anda tek taşıma, 2 MB/s. En yavaş ama en nazik.",
+  "close.confirm_title": "Taşımalar hâlâ çalışıyor",
+  "close.confirm_body": "Uygulama arkaplanda çalışmaya devam edebilir: Dock / görev çubuğunda küçültülmüş olarak kalır, pencereyi geri açmak için simgesine tıklarsınız. Çıkarsanız da ilerleme kayıtlıdır — daha sonra kaldığı yerden, tekrarsız devam eder.",
+  "close.background": "Arkaplanda çalışmaya devam et",
+  "close.quit": "Çık",
   "settings.tso_title": "macOS ağ hızlandırması (TSO) açık",
   "settings.tso_body": "Mac'iniz, veriyi parçalara bölme işini ağ kartına devrediyor (TSO). Bu açıkken kesintisiz büyük yükleme yapmanın macOS çekirdeğini çökerttiği görüldü. Kapatmak biraz hız kaybettirir ve yeniden başlatınca geri gelir. Terminal'de çalıştırın:"
 }

@@ -28,9 +28,16 @@ class FakeWindow:
     def __init__(self):
         self.width = 0
         self.height = 0
+        self.minimized = False
+        self.prevent_close = False
+        self.on_event = None
+        self.destroy_calls = 0
 
     def close(self):
         pass
+
+    async def destroy(self):
+        self.destroy_calls += 1
 
 
 class FakePage:
@@ -726,3 +733,80 @@ def test_no_update_dialog_when_up_to_date(monkeypatch, tmp_path):
 def _dialog_content(dlg):
     content = getattr(dlg, "content", None)
     return getattr(content, "value", "") or ""
+
+
+# ---- close-to-background ---------------------------------------------------
+# Closing the window must not silently kill running migrations: with work
+# active the app offers to keep going minimized (Dock/taskbar), with nothing
+# active it just quits.
+
+def _fire_close(page):
+    import types
+
+    assert page.window.on_event is not None, "no window event handler wired"
+    page.window.on_event(types.SimpleNamespace(type=ft.WindowEventType.CLOSE))
+
+
+def _fake_running_snapshot():
+    from email_export_import.gui.run_manager import RunSnapshot
+
+    return RunSnapshot(key="k", title="t", status="running", processed=1,
+                       total=5, current_folder="INBOX")
+
+
+def test_window_close_is_intercepted():
+    page = _run_page()
+    assert page.window.prevent_close is True
+    assert page.window.on_event is not None
+
+
+def test_close_when_idle_quits():
+    page = _run_page()
+    _fire_close(page)
+    assert _wait(lambda: page.window.destroy_calls == 1), \
+        "idle close did not destroy the window"
+    assert page.dialog is None  # no pointless dialog when nothing is running
+
+
+def test_close_with_active_run_offers_background(monkeypatch):
+    from email_export_import.gui.run_manager import RunManager
+
+    page = _run_page()
+    monkeypatch.setattr(RunManager, "snapshot_all",
+                        lambda self: [_fake_running_snapshot()])
+    _fire_close(page)
+    assert page.dialog is not None, "close with active runs must ask, not die"
+    labels = [lbl for lbl, _ in _clickables(page.dialog)]
+    assert EN("close.background") in labels
+    assert EN("close.quit") in labels
+    assert page.window.destroy_calls == 0
+
+    assert _click(page.dialog, EN("close.background"))
+    assert page.dialog is None
+    assert page.window.minimized is True, "background choice must minimize"
+    assert page.window.destroy_calls == 0  # still alive
+
+
+def test_close_with_active_run_can_still_quit(monkeypatch):
+    from email_export_import.gui.run_manager import RunManager
+
+    page = _run_page()
+    monkeypatch.setattr(RunManager, "snapshot_all",
+                        lambda self: [_fake_running_snapshot()])
+    _fire_close(page)
+    assert _click(page.dialog, EN("close.quit"))
+    assert page.dialog is None
+    assert _wait(lambda: page.window.destroy_calls == 1), \
+        "quit choice did not destroy the window"
+
+
+def test_queued_bulk_work_counts_as_active(monkeypatch):
+    from email_export_import.gui.run_manager import RunManager, RunSnapshot
+
+    page = _run_page()
+    queued = RunSnapshot(key="k", title="t", status="queued", processed=0,
+                         total=0, current_folder=None)
+    monkeypatch.setattr(RunManager, "snapshot_all", lambda self: [queued])
+    _fire_close(page)
+    assert page.dialog is not None, \
+        "queued (bulk) work pending — close must ask, not quit"

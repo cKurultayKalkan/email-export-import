@@ -185,6 +185,10 @@ The desktop app is a **dashboard of migrations**, not a one-shot wizard:
 - **Completed migrations stay visible** as "done" cards — nothing silently
   disappears — and a done card offers **Sync new mail**, which re-runs the
   migration and copies only messages that arrived since. Nothing is duplicated.
+- **Runs in the background.** Closing the window while migrations are running
+  offers to keep them going: the app stays minimized in the Dock / task bar and
+  clicking its icon brings the window back. Quitting instead is always safe —
+  progress is saved and resume picks up without duplicates.
 - **Settings page**: language (Turkish 🇹🇷 / English 🇬🇧, English by default),
   parallel connections per transfer, max simultaneous transfers, update check,
   and where your data is stored.
