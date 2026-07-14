@@ -71,6 +71,13 @@ def _page_main(page: ft.Page) -> None:
     i18n = I18n()
     _prefs = prefs.load_prefs(i18n._prefs_path)
     backend = _make_backend(_prefs)
+    # The daemon should run at login so migrations continue across reboots.
+    # The user chose always-on; install once on first launch, then respect the
+    # Settings toggle. Only meaningful for the daemon backend.
+    if isinstance(backend, DaemonBackend) and not _prefs.get("autostart_done"):
+        from ..daemon import autostart
+        autostart.install()
+        prefs.save_pref(i18n._prefs_path, "autostart_done", True)
     ws = WizardState()
     highlight: list[str | None] = [None]
     # Bulk coordinator: pending (src, dst, preset_key) specs waiting for a slot,
@@ -194,9 +201,16 @@ def _page_main(page: ft.Page) -> None:
         pop_dialog()
         show_settings()  # reopen so the dropdowns show the new values
 
+    def set_autostart(on: bool) -> None:
+        from ..daemon import autostart
+        autostart.install() if on else autostart.remove()
+
     def show_settings() -> None:
         from ..state import DEFAULT_BASE_DIR
+        from ..daemon import autostart
 
+        # Autostart only makes sense with the daemon backend.
+        show_autostart = isinstance(backend, DaemonBackend)
         show_dialog(views.build_settings(
             i18n, str(DEFAULT_BASE_DIR), on_locale=set_locale,
             on_back=pop_dialog, version=__version__,
@@ -205,6 +219,8 @@ def _page_main(page: ft.Page) -> None:
             workers=backend.workers, on_workers=set_workers,
             rate_limit=backend.rate_limit, on_rate_limit=set_rate_limit,
             on_safe_mode=safe_mode, tso_on=sysinfo.tso_enabled(),
+            autostart_on=autostart.is_installed() if show_autostart else None,
+            on_autostart=set_autostart if show_autostart else None,
         ))
 
     def show_dashboard() -> None:
@@ -744,6 +760,10 @@ def _page_main(page: ft.Page) -> None:
         )
 
     def _quit_app() -> None:
+        # A full quit (tray "Quit" / the close dialog's Quit) stops the
+        # out-of-process daemon too, so migrations don't silently continue with
+        # no window anywhere. Closing to background leaves the daemon running.
+        backend.shutdown_daemon()
         page.run_task(page.window.destroy)
 
     def _close_to_background(_e=None) -> None:

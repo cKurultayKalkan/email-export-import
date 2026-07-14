@@ -77,6 +77,10 @@ class LocalBackend:
         if run is not None:
             run.mark_failed(message)
 
+    def shutdown_daemon(self) -> None:
+        """No out-of-process daemon in local mode — nothing to stop."""
+        return None
+
     def active_count(self) -> int:
         return self._manager.active_count()
 

@@ -113,6 +113,8 @@
   "settings.max_active_note": "Toplu taşımalar aynı anda en fazla bu kadar çalışır; geri kalanı sırada bekler. Sunucunuz çok fazla oturum açmayı reddediyorsa düşürün.",
   "settings.workers": "Taşıma başına paralel bağlantı",
   "settings.workers_note": "Bir taşımanın aynı anda kaç mesaj taşıyacağı. Düşük değer daha yavaştır ama ağa ve sunucuya daha nazik davranır.",
+  "settings.autostart": "Uygulamayı kapatınca da taşımaya devam et",
+  "settings.autostart_note": "Uygulama kapalıyken bile taşımaları sürdüren küçük bir arkaplan yardımcısı çalıştırır ve oturum açtığınızda otomatik başlatır. Kapatırsanız yalnızca uygulama açıkken taşınır.",
   "settings.load_title": "Aktarım yükü",
   "settings.rate_limit": "Aktarım hızı sınırı",
   "settings.rate_unlimited": "Sınırsız",

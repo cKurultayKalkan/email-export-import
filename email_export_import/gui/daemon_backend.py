@@ -97,6 +97,13 @@ class DaemonBackend:
     def mark_failed(self, key: str, message: str) -> None:
         self._client.mark_failed(key, message)
 
+    def shutdown_daemon(self) -> None:
+        """Full quit: stop the out-of-process daemon too. Best-effort."""
+        try:
+            self._client.shutdown()
+        except Exception:
+            pass
+
     def active_count(self) -> int:
         return sum(1 for d in self._last
                    if d.get("status") in ("running", "stopping"))

@@ -113,6 +113,8 @@
   "settings.max_active_note": "Bulk migrations run at most this many at once; the rest wait in a queue. Lower this if your server rejects too many logins.",
   "settings.workers": "Parallel connections per transfer",
   "settings.workers_note": "How many messages a transfer moves at once. Lower is slower but gentler on the network and the server.",
+  "settings.autostart": "Keep migrating after I close the app",
+  "settings.autostart_note": "Runs a small background helper that continues transfers even when the app is closed, and starts it automatically when you log in. Turn off to only migrate while the app is open.",
   "settings.load_title": "Transfer load",
   "settings.rate_limit": "Transfer speed limit",
   "settings.rate_unlimited": "Unlimited",

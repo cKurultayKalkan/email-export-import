@@ -40,6 +40,8 @@ def build_settings(
     on_rate_limit: Callable[[int], None] | None = None,
     on_safe_mode: Callable[[], None] | None = None,
     tso_on: bool | None = None,
+    autostart_on: bool | None = None,
+    on_autostart: Callable[[bool], None] | None = None,
 ) -> ft.AlertDialog:
     language = ft.Dropdown(
         label=i18n.t("settings.language"),
@@ -123,6 +125,16 @@ def build_settings(
                 ),
             )
         )
+    if autostart_on is not None and on_autostart is not None:
+        controls += [
+            ft.Divider(),
+            ft.Switch(
+                label=i18n.t("settings.autostart"),
+                value=autostart_on,
+                on_change=lambda e: on_autostart(bool(e.control.value)),
+            ),
+            ft.Text(i18n.t("settings.autostart_note"), size=12),
+        ]
     controls += [
         ft.Divider(),
         ft.Text(f"{i18n.t('settings.version')}: {version}", size=13),
