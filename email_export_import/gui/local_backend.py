@@ -58,6 +58,25 @@ class LocalBackend:
         run = self._manager.get(key)
         return run.state.config if run else None
 
+    def folder_counts(self, key: str) -> dict | None:
+        run = self._manager.get(key)
+        return run.state.folder_done_counts() if run else None
+
+    def last_run(self, key: str) -> dict | None:
+        run = self._manager.get(key)
+        return run.state.last_run if run else None
+
+    def save_config(self, key: str, config: dict) -> None:
+        run = self._manager.get(key)
+        if run is not None:
+            run.state.set_config(config)
+            run.state.flush()
+
+    def mark_failed(self, key: str, message: str) -> None:
+        run = self._manager.get(key)
+        if run is not None:
+            run.mark_failed(message)
+
     def active_count(self) -> int:
         return self._manager.active_count()
 

@@ -29,12 +29,15 @@ def _account(cfg: dict) -> Account:
     )
 
 
-def _snapshot_dict(snap, config=None) -> dict:
+def _snapshot_dict(snap, run=None) -> dict:
     d = dataclasses.asdict(snap) if dataclasses.is_dataclass(snap) else dict(snap)
-    if config is not None:
-        # The side panel needs the source/destination servers; ship them with
-        # the snapshot so the GUI never has to reach into a Run object.
-        d["config"] = config
+    if run is not None:
+        # Everything the side panel reads off a Run's state, shipped with the
+        # snapshot so the GUI never reaches into a Run object.
+        st = run.state
+        d["config"] = st.config
+        d["folder_counts"] = st.folder_done_counts()
+        d["last_run"] = st.last_run
     # TransferProgress isn't JSON-serialisable and the wire only needs a
     # summary; drop the live object and expose the counts the client uses.
     result = d.pop("result", None)
@@ -85,11 +88,7 @@ class _Handler(BaseHTTPRequestHandler):
 
             return self._send(200, {"ok": True, "version": __version__})
         if self.path == "/runs":
-            out = []
-            for s in m.snapshot_all():
-                run = m.get(s.key)
-                cfg = run.state.config if run is not None else None
-                out.append(_snapshot_dict(s, config=cfg))
+            out = [_snapshot_dict(s, run=m.get(s.key)) for s in m.snapshot_all()]
             return self._send(200, {"runs": out})
         if self.path == "/settings":
             return self._send(200, {"max_active": m.max_active,
@@ -138,6 +137,12 @@ class _Handler(BaseHTTPRequestHandler):
             if action == "dismiss":
                 m.remove(key)
                 return self._send(200, {"ok": True})
+            if action == "config":
+                run = m.get(key)
+                if run is not None:
+                    run.state.set_config(body.get("config", {}))
+                    run.state.flush()
+                return self._send(200, {"ok": True})
             run = m.get(key)
             if run is None:
                 return self._send(404, {"error": "no such run"})
@@ -145,6 +150,8 @@ class _Handler(BaseHTTPRequestHandler):
                 run.pause()
             elif action == "cancel":
                 run.cancel()
+            elif action == "fail":
+                run.mark_failed(body.get("message", "failed"))
             else:
                 return self._send(400, {"error": "unknown action"})
             return self._send(200, {"ok": True})

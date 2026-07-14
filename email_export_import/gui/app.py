@@ -8,8 +8,6 @@ import flet as ft
 
 from .. import __version__
 from .. import secrets_store
-from ..models import Account
-from ..state import MigrationState
 from . import prefs
 from . import sysinfo
 from . import tray
@@ -17,25 +15,52 @@ from . import updater
 from . import views
 from .async_ops import run_async
 from .controller import Controller
+from .daemon_backend import DaemonBackend
 from .i18n import I18n
-from .run_manager import Run, RunManager
+from .local_backend import LocalBackend
+from .run_manager import RunManager
 
 
 @dataclass
 class WizardState:
-    src_account: Account | None = None
-    dst_account: Account | None = None
-    src_conn: object = None
-    dst_conn: object = None
-    plan: object = None
+    # Account dicts (host/port/ssl/email/password/verify_ssl) — the GUI no
+    # longer holds live IMAP connections; the backend connects and holds them,
+    # returning only a plan_id.
+    src: dict | None = None
+    dst: dict | None = None
     skip: set[str] = field(default_factory=set)
     workers: int = 4
     spool: bool = False
-    # Set when the plan screen is entered from Resume (reuse the existing state
-    # and key instead of minting a new session).
-    resume_state: object = None
+    plan_id: str | None = None
+    plan_folders: list = field(default_factory=list)
+    plan_total: int = 0
+    # Set when the plan screen is entered from Resume (reuse the existing key
+    # and title instead of minting a new session).
     resume_key: str | None = None
     resume_title: str | None = None
+
+
+def _make_backend(prefs_values: dict):
+    """Prefer the out-of-process daemon (migrations survive the GUI closing);
+    fall back to the in-process backend if it can't be reached, so the app
+    always works even when the daemon can't start."""
+    from ..daemon.lifecycle import connect_or_spawn
+
+    try:
+        client = connect_or_spawn(timeout=8)
+    except Exception:
+        client = None
+    if client is not None:
+        backend = DaemonBackend(client)
+    else:
+        manager = RunManager()
+        manager.load_resumable()
+        manager.load_completed()
+        backend = LocalBackend(manager, Controller())
+    backend.set_max_active(prefs_values.get("max_active", 2))
+    backend.set_workers(prefs_values.get("workers", 4))
+    backend.set_rate_limit(prefs_values.get("rate_limit", 0))
+    return backend
 
 
 def main() -> None:
@@ -44,14 +69,8 @@ def main() -> None:
 
 def _page_main(page: ft.Page) -> None:
     i18n = I18n()
-    controller = Controller()
-    manager = RunManager()
     _prefs = prefs.load_prefs(i18n._prefs_path)
-    manager.max_active = _prefs.get("max_active", 2)
-    manager.workers = _prefs.get("workers", 4)
-    manager.rate_limit = _prefs.get("rate_limit", 0)
-    manager.load_resumable()
-    manager.load_completed()  # keep finished migrations visible as done cards
+    backend = _make_backend(_prefs)
     ws = WizardState()
     highlight: list[str | None] = [None]
     # Bulk coordinator: pending (src, dst, preset_key) specs waiting for a slot,
@@ -154,15 +173,15 @@ def _page_main(page: ft.Page) -> None:
         show_settings()   # reopen the dialog, re-rendered
 
     def set_max_active(n: int) -> None:
-        manager.max_active = n
+        backend.set_max_active(n)
         prefs.save_pref(i18n._prefs_path, "max_active", n)
 
     def set_workers(n: int) -> None:
-        manager.workers = n
+        backend.set_workers(n)
         prefs.save_pref(i18n._prefs_path, "workers", n)
 
     def set_rate_limit(n: int) -> None:
-        manager.rate_limit = n
+        backend.set_rate_limit(n)
         prefs.save_pref(i18n._prefs_path, "rate_limit", n)
 
     def safe_mode() -> None:
@@ -182,13 +201,14 @@ def _page_main(page: ft.Page) -> None:
             i18n, str(DEFAULT_BASE_DIR), on_locale=set_locale,
             on_back=pop_dialog, version=__version__,
             on_check_update=lambda: _check_updates(manual=True),
-            max_active=manager.max_active, on_max_active=set_max_active,
-            workers=manager.workers, on_workers=set_workers,
-            rate_limit=manager.rate_limit, on_rate_limit=set_rate_limit,
+            max_active=backend.max_active, on_max_active=set_max_active,
+            workers=backend.workers, on_workers=set_workers,
+            rate_limit=backend.rate_limit, on_rate_limit=set_rate_limit,
             on_safe_mode=safe_mode, tso_on=sysinfo.tso_enabled(),
         ))
 
     def show_dashboard() -> None:
+        backend.refresh()  # freshen the snapshot cache before rendering
         page.views.clear()
         page.views.append(_main_view())
         page.update()
@@ -221,7 +241,7 @@ def _page_main(page: ft.Page) -> None:
         return []
 
     def _main_view() -> ft.View:
-        snaps = manager.snapshot_all()
+        snaps = backend.snapshot_all()
         if highlight[0] is not None:
             selected_key[0] = highlight[0]
             highlight[0] = None
@@ -230,8 +250,7 @@ def _page_main(page: ft.Page) -> None:
         ):
             selected_key[0] = snaps[0].key if snaps else None
         sel = next((s for s in snaps if s.key == selected_key[0]), None)
-        run = manager.get(sel.key) if sel is not None else None
-        cfg = run.state.config if run is not None else None
+        cfg = backend.config_for(sel.key) if sel is not None else None
         refs: dict = {}
         view = views.build_main(
             i18n, snaps, selected_key[0], cfg,
@@ -240,29 +259,23 @@ def _page_main(page: ft.Page) -> None:
             on_dismiss=do_dismiss,
             on_edit=lambda: _edit_dialog(selected_key[0]),
             refs=refs,
-            folder_counts=run.state.folder_done_counts() if run is not None else None,
-            last_run=run.state.last_run if run is not None else None,
+            folder_counts=backend.folder_counts(sel.key) if sel is not None else None,
+            last_run=backend.last_run(sel.key) if sel is not None else None,
         )
         render["dash_refs"] = refs
         render["dash_sig"] = (views.dashboard_signature(snaps), selected_key[0])
         return _decorate(view, _main_extras(sel), scrollable=False)
 
     def do_pause(key: str) -> None:
-        run = manager.get(key)
-        if run is not None:
-            run.pause()
+        backend.pause(key)
         refresh_current()
 
     def do_cancel(key: str) -> None:
         # Cancelling is a click away on every card, so guard it behind an
         # "are you sure?" confirmation — a misclick must not discard a run.
-        run = manager.get(key)
-        if run is None:
-            return
-
         def confirm(_e=None) -> None:
             pop_dialog()
-            run.cancel()
+            backend.cancel(key)
             refresh_current()
 
         show_dialog(
@@ -278,16 +291,16 @@ def _page_main(page: ft.Page) -> None:
         )
 
     def do_dismiss(key: str) -> None:
-        manager.remove(key)
+        backend.remove(key)
         show_dashboard()
 
     # ---- resume ---------------------------------------------------------
 
     def ask_resume(key: str) -> None:
-        run = manager.get(key)
-        if run is None:
+        cfg = backend.config_for(key)
+        if cfg is None:
             return
-        cfg = run.state.config or {}
+        title = next((s.title for s in backend.snapshot_all() if s.key == key), key)
         src_cfg, dst_cfg = cfg.get("src", {}), cfg.get("dst", {})
         # Pre-fill from the OS keychain if the user chose to remember before.
         src_saved = secrets_store.get_password(
@@ -308,78 +321,58 @@ def _page_main(page: ft.Page) -> None:
                     src_cfg.get("host", ""), src_cfg.get("email", ""), "source")
                 secrets_store.delete_password(
                     dst_cfg.get("host", ""), dst_cfg.get("email", ""), "dest")
+            src_dict = _account_dict(src_cfg, src_pw, "EEI_SRC_PASSWORD")
+            dst_dict = _account_dict(dst_cfg, dst_pw, "EEI_DST_PASSWORD")
             # Reconnecting + reading folders can take a while on a slow or
             # rate-limiting server — show the spinner so it never looks frozen.
             show_loading(True, i18n.t("account.testing"))
             run_async(
-                lambda: _reconnect_and_build(cfg, src_pw, dst_pw),
-                on_done=ui(lambda built: _start_resumed(key, run, cfg, built)),
+                lambda: backend.plan(src_dict, dst_dict, sorted(cfg.get("skip", []))),
+                on_done=ui(lambda plan: _start_resumed(key, title, cfg,
+                                                       src_dict, dst_dict, plan)),
                 on_error=ui(lambda exc: _show_error(str(exc))),
             )
 
         show_dialog(
             views.build_password_dialog(
-                i18n, run.title, submit, lambda: pop_dialog(),
+                i18n, title, submit, lambda: pop_dialog(),
                 src_prefill=src_saved, dst_prefill=dst_saved,
                 can_remember=secrets_store.available(),
                 remember_default=bool(src_saved or dst_saved),
             )
         )
 
-    def _reconnect_and_build(cfg: dict, src_pw: str, dst_pw: str):
-        src = _account_from_cfg(cfg["src"], src_pw, "EEI_SRC_PASSWORD")
-        dst = _account_from_cfg(cfg["dst"], dst_pw, "EEI_DST_PASSWORD")
-        src_result = controller.test_connection(src)
-        if not src_result.ok:
-            raise RuntimeError(src_result.message or "source connection failed")
-        try:
-            dst_result = controller.test_connection(dst)
-            if not dst_result.ok:
-                raise RuntimeError(dst_result.message or "destination connection failed")
-            try:
-                plan = controller.build_plan(
-                    src_result.conn, dst_result.conn, set(cfg.get("skip", []))
-                )
-            except Exception:
-                dst_result.conn.close()
-                raise
-        except Exception:
-            src_result.conn.close()
-            raise
-        return src_result.conn, dst_result.conn, plan
-
-    def _start_resumed(key: str, old_run: Run, cfg: dict, built) -> None:
+    def _start_resumed(key: str, title: str, cfg: dict,
+                       src_dict: dict, dst_dict: dict, plan: dict) -> None:
         # Resume routes through the plan screen so the user can choose which
         # folders to transfer (and adjust workers/spool) right before starting.
         nonlocal ws
         show_loading(False)
-        src_conn, dst_conn, plan = built
         ws = WizardState()
-        ws.src_account = src_conn.account
-        ws.dst_account = dst_conn.account
-        ws.src_conn = src_conn
-        ws.dst_conn = dst_conn
-        ws.plan = plan
+        ws.src, ws.dst = src_dict, dst_dict
+        ws.plan_id = plan["plan_id"]
+        ws.plan_folders = plan["folders"]
+        ws.plan_total = plan["total"]
         ws.skip = set(cfg.get("skip", []))
         # Deliberately NOT cfg["workers"]: that records what the run used last
         # time. The current setting is the user's live "how hard to push" knob —
         # lowering it must actually take effect on resume (they can still
         # override per-run on the plan screen).
-        ws.workers = manager.default_workers()
+        ws.workers = backend.default_workers()
         ws.spool = cfg.get("spool", False)
-        ws.resume_state = old_run.state
         ws.resume_key = key
-        ws.resume_title = old_run.title
+        ws.resume_title = title
         _render_plan()
 
-    def _account_from_cfg(cfg: dict, password: str, env_var: str) -> Account:
+    def _account_dict(cfg: dict, password: str, env_var: str) -> dict:
         import os
 
-        return Account(
-            host=cfg["host"], port=cfg["port"], ssl=cfg["ssl"], email=cfg["email"],
-            password=password or os.environ.get(env_var, ""),
-            verify_ssl=cfg.get("verify_ssl", True),
-        )
+        return {
+            "host": cfg["host"], "port": cfg.get("port", 993),
+            "ssl": cfg.get("ssl", True), "email": cfg["email"],
+            "password": password or os.environ.get(env_var, ""),
+            "verify_ssl": cfg.get("verify_ssl", True),
+        }
 
     def _show_error(message: str) -> None:
         show_loading(False)  # any failed transition must drop the spinner
@@ -448,10 +441,10 @@ def _page_main(page: ft.Page) -> None:
     def _edit_dialog(key: str | None) -> None:
         if key is None:
             return
-        run = manager.get(key)
-        if run is None or not run.state.config:
+        cfg = backend.config_for(key)
+        if not cfg:
             return
-        cfg = dict(run.state.config)
+        cfg = dict(cfg)
         src_controls, src_collect = views._account_editor(
             i18n, i18n.t("account.source_title"), cfg.get("src", {}))
         dst_controls, dst_collect = views._account_editor(
@@ -460,8 +453,7 @@ def _page_main(page: ft.Page) -> None:
         def save(_e=None) -> None:
             cfg["src"] = src_collect()
             cfg["dst"] = dst_collect()
-            run.state.set_config(cfg)
-            run.state.flush()
+            backend.save_config(key, cfg)
             pop_dialog()
             show_dashboard()
 
@@ -511,7 +503,7 @@ def _page_main(page: ft.Page) -> None:
                     continue
                 route = page.views[-1].route
                 if route == "/":
-                    snaps = manager.snapshot_all()
+                    snaps = backend.refresh()  # freshen cache; returns snapshots
                     sig = (views.dashboard_signature(snaps), selected_key[0])
                     if sig == render["dash_sig"]:
                         # Same rows, same statuses, same selection — only
@@ -546,46 +538,52 @@ def _page_main(page: ft.Page) -> None:
     def go_account(role: str, prefill: dict | None = None) -> None:
         status = ft.Text("")
         initial = dict(prefill or {})
-        if role == "dest" and ws.src_account and not initial.get("email"):
-            initial["email"] = ws.src_account.email
+        if role == "dest" and ws.src and not initial.get("email"):
+            initial["email"] = ws.src["email"]
 
         handles: dict = {}
 
-        def on_test(account: Account) -> None:
+        def _to_dict(account) -> dict:
+            return {"host": account.host, "port": account.port, "ssl": account.ssl,
+                    "email": account.email, "password": account.password,
+                    "verify_ssl": account.verify_ssl}
+
+        def on_test(account) -> None:
             status.value = i18n.t("account.testing")
             safe_update(status)
             handles["set_busy"](True)
             show_loading(True, i18n.t("account.testing"))
+            acc = _to_dict(account)
             run_async(
-                lambda: controller.test_connection(account),
-                on_done=ui(lambda result: _test_done(account, result)),
-                on_error=ui(lambda exc: _test_done(account, None, exc)),
+                lambda: backend.test_connection(acc),
+                on_done=ui(lambda result: _test_done(account, acc, result)),
+                on_error=ui(lambda exc: _test_done(account, acc, None, exc)),
             )
 
-        def _test_done(account: Account, result, exc: Exception | None = None) -> None:
+        def _test_done(account, acc: dict, result, exc: Exception | None = None) -> None:
             show_loading(False)
             handles["set_busy"](False)
             if exc is not None:
                 status.value = str(exc)
                 safe_update(status)
                 return
-            if result.ok:
+            if result.get("ok"):
                 status.value = i18n.t("account.connected")
                 safe_update(status)
                 if role == "source":
-                    ws.src_account, ws.src_conn = account, result.conn
-                    ws.skip = controller.default_skip(handles["preset_key"]())
+                    ws.src = acc
+                    ws.skip = Controller.default_skip(handles["preset_key"]())
                     go_account("dest")
                 else:
-                    ws.dst_account, ws.dst_conn = account, result.conn
+                    ws.dst = acc
                     go_plan()
-            elif result.kind == "cert":
+            elif result.get("kind") == "cert":
                 _cert_dialog(account)
             else:
-                status.value = i18n.t(f"error.{result.kind}")
+                status.value = i18n.t(f"error.{result.get('kind')}")
                 safe_update(status)
 
-        def _cert_dialog(account: Account) -> None:
+        def _cert_dialog(account) -> None:
             def retry_unverified(e) -> None:
                 pop_dialog()
                 account.verify_ssl = False
@@ -614,16 +612,18 @@ def _page_main(page: ft.Page) -> None:
         show_dialog(dlg)
 
     def go_plan() -> None:
-        ws.workers = manager.default_workers()
+        ws.workers = backend.default_workers()
 
         def plan_ready(plan) -> None:
             show_loading(False)
-            ws.plan = plan
+            ws.plan_id = plan["plan_id"]
+            ws.plan_folders = plan["folders"]
+            ws.plan_total = plan["total"]
             _render_plan()
 
         show_loading(True, i18n.t("loading.plan"))
         run_async(
-            lambda: controller.build_plan(ws.src_conn, ws.dst_conn, ws.skip),
+            lambda: backend.plan(ws.src, ws.dst, sorted(ws.skip)),
             on_done=ui(plan_ready),
             on_error=ui(lambda exc: _show_error(str(exc))),
         )
@@ -644,7 +644,7 @@ def _page_main(page: ft.Page) -> None:
         def _plan_dialog() -> ft.AlertDialog:
             back = pop_dialog if ws.resume_key else (lambda: go_account("dest"))
             return views.build_plan(
-                i18n, ws.plan, ws.skip, ws.workers, ws.spool,
+                i18n, ws.plan_folders, ws.skip, ws.workers, ws.spool,
                 on_toggle, on_workers, on_spool, start_migration, back,
             )
 
@@ -653,26 +653,19 @@ def _page_main(page: ft.Page) -> None:
 
     def start_migration() -> None:
         pop_dialog()  # the plan dialog
-        key = ws.resume_key or f"{ws.src_account.email}__{ws.dst_account.email}"
-        existing = manager.get(key)
-        if existing is not None and existing.is_active:
+        key = ws.resume_key or f"{ws.src['email']}__{ws.dst['email']}"
+        existing = next((s for s in backend.snapshot_all() if s.key == key), None)
+        if existing is not None and existing.status in ("running", "stopping"):
             highlight[0] = key
             back_to_dashboard()
             return
-        active_plans = [p for p in ws.plan.plans if p.source not in ws.skip]
-        total = sum(ws.plan.counts.get(p.source, 0) for p in active_plans)
-        state = ws.resume_state or MigrationState.for_pair(
-            ws.src_account.email, ws.dst_account.email
-        )
-        title = ws.resume_title or f"{ws.src_account.email} → {ws.dst_account.email}"
-        run = Run(
-            key=key, title=title,
-            src_conn=ws.src_conn, dst_conn=ws.dst_conn, plans=active_plans,
-            state=state, workers=ws.workers, total=total, skip=ws.skip,
-            spool_enabled=ws.spool, rate_limit=manager.rate_limit,
-        )
-        manager.add(run)
-        run.start()
+        title = ws.resume_title or f"{ws.src['email']} → {ws.dst['email']}"
+        try:
+            key = backend.start(ws.plan_id, sorted(ws.skip), ws.workers,
+                                ws.spool, title)
+        except Exception as exc:  # noqa: BLE001
+            _show_error(str(exc))
+            return
         highlight[0] = key
         back_to_dashboard()
 
@@ -682,85 +675,57 @@ def _page_main(page: ft.Page) -> None:
         dlg, _handles = views.build_bulk(i18n, on_start=start_bulk, on_back=pop_dialog)
         show_dialog(dlg)
 
+    def _acc_dict(account) -> dict:
+        return {"host": account.host, "port": account.port, "ssl": account.ssl,
+                "email": account.email, "password": account.password,
+                "verify_ssl": account.verify_ssl}
+
     def start_bulk(pairs: list, preset_key: str | None) -> None:
         pop_dialog()  # the bulk dialog
         # Add a queued placeholder card per account immediately, then let the
-        # poll pump them onto real runs as slots free (cap = manager.max_active).
+        # poll pump them onto real runs as slots free (cap = max_active).
+        active_keys = {s.key for s in backend.snapshot_all()
+                       if s.status in ("running", "stopping")}
         for src, dst in pairs:
             key = f"{src.email}__{dst.email}"
-            existing = manager.get(key)
-            if existing is not None and existing.is_active:
+            if key in active_keys:
                 highlight[0] = key
                 continue  # already running for this pair — skip the duplicate
-            state = MigrationState.for_pair(src.email, dst.email, base_dir=manager.state_dir)
-            placeholder = Run(
-                key=key, title=f"{src.email} → {dst.email}",
-                src_conn=None, dst_conn=None, plans=None, state=state,
-                workers=manager.default_workers(), total=0,
-            )
-            manager.add(placeholder)
-            bulk_pending.append((src, dst, preset_key))
+            backend.add_placeholder(src.email, dst.email)
+            bulk_pending.append((_acc_dict(src), _acc_dict(dst), preset_key))
         back_to_dashboard()
 
     def pump_bulk() -> None:
         # Runs on the event loop (called from poll). Start connects until the
         # cap (active runs + in-flight connects) is reached.
         while (
-            manager.active_count() + len(bulk_starting) < manager.max_active
+            backend.active_count() + len(bulk_starting) < backend.max_active
             and bulk_pending
         ):
             src, dst, preset_key = bulk_pending.pop(0)
-            key = f"{src.email}__{dst.email}"
+            key = f"{src['email']}__{dst['email']}"
             bulk_starting.add(key)
             run_async(
-                lambda s=src, d=dst, pk=preset_key: _bulk_connect(s, d, pk),
+                lambda s=src, d=dst, pk=preset_key: _bulk_build(s, d, pk),
                 on_done=ui(lambda built, k=key: _bulk_started(k, built)),
                 on_error=ui(lambda exc, k=key: _bulk_failed(k, str(exc))),
             )
 
-    def _bulk_connect(src, dst, preset_key):
-        src_result = controller.test_connection(src)
-        if not src_result.ok:
-            raise RuntimeError(src_result.message or "source connection failed")
-        try:
-            dst_result = controller.test_connection(dst)
-            if not dst_result.ok:
-                raise RuntimeError(dst_result.message or "destination connection failed")
-            try:
-                skip = controller.default_skip(preset_key)
-                plan = controller.build_plan(src_result.conn, dst_result.conn, skip)
-            except Exception:
-                dst_result.conn.close()
-                raise
-        except Exception:
-            src_result.conn.close()
-            raise
-        return src_result.conn, dst_result.conn, plan, skip
+    def _bulk_build(src: dict, dst: dict, preset_key: str | None):
+        skip = sorted(Controller.default_skip(preset_key))
+        plan = backend.plan(src, dst, skip)  # raises on connect failure
+        return plan, skip
 
     def _bulk_started(key: str, built) -> None:
         bulk_starting.discard(key)
-        src_conn, dst_conn, plan, skip = built
-        active_plans = [p for p in plan.plans if p.source not in skip]
-        total = sum(plan.counts.get(p.source, 0) for p in active_plans)
-        run = Run(
-            key=key, title=f"{src_conn.account.email} → {dst_conn.account.email}",
-            src_conn=src_conn, dst_conn=dst_conn, plans=active_plans,
-            state=MigrationState.for_pair(
-                src_conn.account.email, dst_conn.account.email, base_dir=manager.state_dir
-            ),
-            workers=manager.default_workers(), total=total, skip=set(skip),
-            rate_limit=manager.rate_limit,
-        )
-        manager.add(run)  # replaces the queued placeholder
-        run.start()
+        plan, skip = built
+        backend.start(plan["plan_id"], skip, backend.default_workers())
         highlight[0] = key
         refresh_current()
 
     def _bulk_failed(key: str, message: str) -> None:
         bulk_starting.discard(key)
-        run = manager.get(key)
-        if run is not None:
-            run.mark_failed(message)
+        backend.mark_failed(key, message)
         refresh_current()
 
     # ---- close-to-background --------------------------------------------
@@ -775,7 +740,7 @@ def _page_main(page: ft.Page) -> None:
     def _work_pending() -> bool:
         return any(
             s.status in ("running", "stopping", "queued")
-            for s in manager.snapshot_all()
+            for s in backend.snapshot_all()
         )
 
     def _quit_app() -> None:
@@ -841,7 +806,7 @@ def _page_main(page: ft.Page) -> None:
     tray_handle = tray.start_status_item(
         i18n.t("app.title"),
         [
-            (lambda item: i18n.t("tray.status", count=manager.active_count()), None),
+            (lambda item: i18n.t("tray.status", count=backend.active_count()), None),
             (i18n.t("tray.show"), ui(_restore_window)),
             (i18n.t("menu.quit"), ui(_tray_quit)),
         ],
@@ -904,7 +869,7 @@ def _page_main(page: ft.Page) -> None:
             toolbar_items.append(None)
             toolbar_items += extras
         toolbar_items += [None, (ft.Icons.SETTINGS, i18n.t("nav.settings"), show_settings)]
-        active = manager.active_count()
+        active = backend.active_count()
         status = (
             i18n.t("status.ready") if active == 0
             else i18n.t("tray.status", count=active)

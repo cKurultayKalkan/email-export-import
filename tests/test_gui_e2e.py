@@ -185,6 +185,11 @@ def _isolate(monkeypatch, tmp_path):
     prefs.write_text(json.dumps({"locale": "en"}))  # deterministic English labels
     monkeypatch.setattr(i18n_module, "DEFAULT_PREFS_PATH", prefs)
     monkeypatch.setattr(connection.time, "sleep", lambda s: None)
+    # Force the in-process backend: these tests drive the real handlers with a
+    # monkeypatched IMAPClient, which a spawned daemon subprocess wouldn't see.
+    # The daemon path has its own suite (test_daemon*).
+    from email_export_import.daemon import lifecycle
+    monkeypatch.setattr(lifecycle, "connect_or_spawn", lambda *a, **k: None)
 
 
 

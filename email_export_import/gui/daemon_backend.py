@@ -73,11 +73,29 @@ class DaemonBackend:
     def snapshot_all(self) -> list[RunSnapshot]:
         return [_snapshot_from_wire(d) for d in self._last]
 
-    def config_for(self, key: str) -> dict | None:
+    def _cached(self, key: str) -> dict | None:
         for d in self._last:
             if d["key"] == key:
-                return d.get("config")
+                return d
         return None
+
+    def config_for(self, key: str) -> dict | None:
+        d = self._cached(key)
+        return d.get("config") if d else None
+
+    def folder_counts(self, key: str) -> dict | None:
+        d = self._cached(key)
+        return d.get("folder_counts") if d else None
+
+    def last_run(self, key: str) -> dict | None:
+        d = self._cached(key)
+        return d.get("last_run") if d else None
+
+    def save_config(self, key: str, config: dict) -> None:
+        self._client.save_config(key, config)
+
+    def mark_failed(self, key: str, message: str) -> None:
+        self._client.mark_failed(key, message)
 
     def active_count(self) -> int:
         return sum(1 for d in self._last
