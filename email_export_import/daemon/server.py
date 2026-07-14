@@ -29,8 +29,12 @@ def _account(cfg: dict) -> Account:
     )
 
 
-def _snapshot_dict(snap) -> dict:
+def _snapshot_dict(snap, config=None) -> dict:
     d = dataclasses.asdict(snap) if dataclasses.is_dataclass(snap) else dict(snap)
+    if config is not None:
+        # The side panel needs the source/destination servers; ship them with
+        # the snapshot so the GUI never has to reach into a Run object.
+        d["config"] = config
     # TransferProgress isn't JSON-serialisable and the wire only needs a
     # summary; drop the live object and expose the counts the client uses.
     result = d.pop("result", None)
@@ -81,8 +85,12 @@ class _Handler(BaseHTTPRequestHandler):
 
             return self._send(200, {"ok": True, "version": __version__})
         if self.path == "/runs":
-            return self._send(200, {"runs": [_snapshot_dict(s)
-                                             for s in m.snapshot_all()]})
+            out = []
+            for s in m.snapshot_all():
+                run = m.get(s.key)
+                cfg = run.state.config if run is not None else None
+                out.append(_snapshot_dict(s, config=cfg))
+            return self._send(200, {"runs": out})
         if self.path == "/settings":
             return self._send(200, {"max_active": m.max_active,
                                     "workers": m.workers,
