@@ -1074,6 +1074,8 @@ def build_side_panel(
     on_dismiss: Callable[[str], None],
     on_edit: Callable[[], None],
     refs: dict,
+    folder_counts: dict[str, int] | None = None,
+    last_run: dict | None = None,
 ) -> ft.Control:
     """Right properties pane for the selected migration."""
     muted = ft.Colors.with_opacity(0.6, ft.Colors.ON_SURFACE)
@@ -1137,16 +1139,24 @@ def build_side_panel(
             ft.Divider(height=1, color=_hairline()),
         ]
     # Results block: what actually happened, in numbers the user can audit.
+    # Prefer the live result; fall back to the persisted last-run summary so
+    # the statistics survive an app restart.
+    stats: dict | None = None
     if snap.result is not None:
+        stats = {"migrated": snap.result.migrated, "skipped": snap.result.skipped,
+                 "failed": snap.result.failed, "failures": snap.result.failures}
+    elif last_run:
+        stats = last_run
+    if stats:
         items += [
-            field(i18n.t("done.migrated"), ft.Text(str(snap.result.migrated), size=13)),
-            field(i18n.t("done.skipped"), ft.Text(str(snap.result.skipped), size=13)),
+            field(i18n.t("done.migrated"), ft.Text(str(stats.get("migrated", 0)), size=13)),
+            field(i18n.t("done.skipped"), ft.Text(str(stats.get("skipped", 0)), size=13)),
         ]
-        if snap.result.failed:
+        if stats.get("failed"):
             items.append(field(i18n.t("done.failed"),
-                               ft.Text(str(snap.result.failed), size=13,
+                               ft.Text(str(stats["failed"]), size=13,
                                        color=ft.Colors.RED_400)))
-            for line in snap.result.failures[:3]:
+            for line in (stats.get("failures") or [])[:3]:
                 items.append(ft.Text(line, size=11, color=ft.Colors.RED_400))
     if snap.duration_seconds is not None:
         secs = int(snap.duration_seconds)
@@ -1155,6 +1165,19 @@ def build_side_panel(
         items.append(field(i18n.t("panel.duration"), ft.Text(text, size=13)))
     if snap.error_message:
         items.append(ft.Text(snap.error_message, size=12, color=ft.Colors.RED_400))
+    if folder_counts:
+        items.append(ft.Divider(height=1, color=_hairline()))
+        items.append(ft.Text(i18n.t("panel.folders"), size=12, color=muted))
+        shown = sorted(folder_counts.items(), key=lambda kv: -kv[1])[:8]
+        for name, n in shown:
+            items.append(ft.Row([
+                ft.Text(name, size=12, expand=True,
+                        overflow=ft.TextOverflow.ELLIPSIS),
+                ft.Text(str(n), size=12, color=muted),
+            ]))
+        if len(folder_counts) > len(shown):
+            items.append(ft.Text(f"… +{len(folder_counts) - len(shown)}",
+                                 size=11, color=muted))
     items.append(ft.Row(actions, wrap=True, spacing=6))
     return ft.Container(
         width=300,
@@ -1175,11 +1198,14 @@ def build_main(
     on_dismiss: Callable[[str], None],
     on_edit: Callable[[], None],
     refs: dict,
+    folder_counts: dict[str, int] | None = None,
+    last_run: dict | None = None,
 ) -> ft.View:
     """The single master-detail window body: run list left, properties right."""
     selected = next((s for s in snapshots if s.key == selected_key), None)
     panel = build_side_panel(i18n, selected, config, on_pause, on_resume,
-                             on_cancel, on_dismiss, on_edit, refs)
+                             on_cancel, on_dismiss, on_edit, refs,
+                             folder_counts=folder_counts, last_run=last_run)
     body = ft.Row(
         [
             build_run_list(i18n, snapshots, selected_key, on_select, refs),

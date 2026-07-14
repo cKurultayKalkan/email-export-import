@@ -130,6 +130,7 @@
   "status.ready": "Hazır",
   "panel.none": "Soldan bir taşıma seçin",
   "panel.duration": "Süre",
+  "panel.folders": "Klasör dökümü",
   "panel.source": "Kaynak",
   "panel.dest": "Hedef",
   "tray.status": "{count} taşıma çalışıyor",

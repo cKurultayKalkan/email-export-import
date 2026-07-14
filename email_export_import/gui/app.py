@@ -239,6 +239,8 @@ def _page_main(page: ft.Page) -> None:
             on_dismiss=do_dismiss,
             on_edit=lambda: _edit_dialog(selected_key[0]),
             refs=refs,
+            folder_counts=run.state.folder_done_counts() if run is not None else None,
+            last_run=run.state.last_run if run is not None else None,
         )
         render["dash_refs"] = refs
         render["dash_sig"] = (views.dashboard_signature(snaps), selected_key[0])

@@ -438,3 +438,25 @@ def test_connect_installs_the_paced_socket(monkeypatch):
     conn.connect()
     assert isinstance(conn._client._imap.sock, connection._PacedSocket), \
         "the hard ceiling must be installed on every connection"
+
+
+def test_every_slice_draws_from_the_global_aggregate_ceiling(monkeypatch):
+    # Many transfers x many workers must not multiply into a flood: every
+    # connection's writes share one process-wide bucket.
+    from email_export_import import connection
+
+    drawn = []
+
+    class FakePacer:
+        def acquire(self, n, cancel=None):
+            drawn.append(n)
+
+    monkeypatch.setattr(connection, "_GLOBAL_PACER", FakePacer())
+    monkeypatch.setattr(connection.time, "sleep", lambda s: None)
+
+    class FakeSock:
+        def sendall(self, data): pass
+
+    connection._PacedSocket(FakeSock()).sendall(b"x" * (200 * 1024))
+    assert sum(drawn) == 200 * 1024
+    assert max(drawn) <= connection._PacedSocket.CHUNK

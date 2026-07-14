@@ -191,8 +191,18 @@ class Run:
                         self._status = "error"
                     else:
                         self._status = "done"
+                if result is not None:
+                    # Persist the run's outcome so the results panel survives
+                    # an app restart instead of evaporating with the session.
+                    self._state.last_run = {
+                        "migrated": result.migrated,
+                        "skipped": result.skipped,
+                        "failed": result.failed,
+                        "failures": list(result.failures[:5]),
+                    }
                 if self._status == "done":
                     self._state.mark_completed()
+                if result is not None or self._status == "done":
                     self._state.flush()
 
         self._thread = threading.Thread(target=run, daemon=True)

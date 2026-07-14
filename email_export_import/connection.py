@@ -72,6 +72,25 @@ def _cap_send_buffer(client: IMAPClient, size: int = SEND_BUFFER_BYTES) -> None:
 # and "fast" is not worth a kernel panic.
 HARD_UPLOAD_CEILING_BYTES_PER_SEC = 2 * 1024 * 1024  # field-validated for 5h46m
 
+# And a process-wide aggregate ceiling on top: many simultaneous transfers
+# times many workers must not multiply into a flood (32 connections at
+# 2 MB/s each would still stress the shared mbuf pool). Every connection's
+# writes draw from this one bucket, whatever the user's settings say.
+GLOBAL_UPLOAD_CEILING_BYTES_PER_SEC = 8 * 1024 * 1024
+
+
+def _global_pacer():
+    """Created lazily so importing this module never starts clocks in tests."""
+    global _GLOBAL_PACER
+    if _GLOBAL_PACER is None:
+        from .throttle import RateLimiter
+
+        _GLOBAL_PACER = RateLimiter(GLOBAL_UPLOAD_CEILING_BYTES_PER_SEC)
+    return _GLOBAL_PACER
+
+
+_GLOBAL_PACER = None
+
 
 class _PacedSocket:
     """Wraps the connection's socket: writes go out in small slices with a
@@ -90,8 +109,11 @@ class _PacedSocket:
 
     def sendall(self, data) -> None:
         mv = memoryview(bytes(data)) if not isinstance(data, (bytes, memoryview)) else memoryview(data)
+        pacer = _global_pacer()
         for i in range(0, len(mv), self.CHUNK):
-            self._sock.sendall(mv[i : i + self.CHUNK])
+            chunk = mv[i : i + self.CHUNK]
+            pacer.acquire(len(chunk))  # process-wide aggregate ceiling
+            self._sock.sendall(chunk)
             time.sleep(self._PAUSE)  # let the queue drain before the next slice
 
 

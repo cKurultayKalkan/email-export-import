@@ -130,6 +130,7 @@
   "status.ready": "Ready",
   "panel.none": "Select a migration on the left",
   "panel.duration": "Duration",
+  "panel.folders": "Folder breakdown",
   "panel.source": "Source",
   "panel.dest": "Destination",
   "tray.status": "{count} migrations running",

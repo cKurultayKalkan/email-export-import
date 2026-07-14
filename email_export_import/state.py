@@ -28,6 +28,9 @@ class MigrationState:
         # "first started" → "finally completed", not active transfer time.
         self.started_at: float | None = None
         self.finished_at: float | None = None
+        # Summary of the most recent run (migrated/skipped/failed + first
+        # failure lines) — persisted so the results survive an app restart.
+        self.last_run: dict | None = None
         if path.exists():
             raw = json.loads(path.read_text())
             for name, f in raw.get("folders", {}).items():
@@ -43,6 +46,7 @@ class MigrationState:
             self.status = raw.get("status", "running")
             self.started_at = raw.get("started_at")
             self.finished_at = raw.get("finished_at")
+            self.last_run = raw.get("last_run")
 
     @classmethod
     def for_pair(
@@ -136,6 +140,10 @@ class MigrationState:
         margin and reads as an unfinished run."""
         return sum(len(f["done_uids"]) for f in self._folders.values())
 
+    def folder_done_counts(self) -> dict[str, int]:
+        """Per-folder handled-message counts, for the results breakdown."""
+        return {name: len(f["done_uids"]) for name, f in self._folders.items()}
+
     def mark_processed(self, folder: str, uid: int) -> None:
         """Record a UID that was handled without producing a migrated message
         (e.g. expunged from the source mid-run): resumes must not retry it and
@@ -205,6 +213,7 @@ class MigrationState:
             "status": self.status,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
+            "last_run": self.last_run,
         }
         tmp = self.path.with_suffix(".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
