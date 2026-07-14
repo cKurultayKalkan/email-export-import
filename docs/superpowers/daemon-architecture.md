@@ -79,6 +79,38 @@ opening IMAP connections in-process.
 - GUI: FakeDaemonClient in the headless harness mirrors today's FakePage
   pattern; e2e tests keep driving real handlers.
 
+## Build status (2026-07-14)
+
+Done and tested (20 daemon tests, all green):
+- `daemon/server.py` — RunManager + Controller behind a token-guarded
+  loopback `ThreadingHTTPServer`. Endpoints: `GET /ping /runs /settings`;
+  `POST /settings /shutdown /plan /start` and
+  `/runs/<key>/{pause,cancel,dismiss}`. `/plan` connects with in-memory
+  credentials and holds the live connections; `/start` turns a held plan
+  into a running Run.
+- `daemon/client.py` — `DaemonClient` (read surface mirrors RunManager +
+  controls + plan/start).
+- `daemon/__main__.py` — `python -m email_export_import.daemon`: random
+  loopback port + token written 0600 to `daemon.json` (rendezvous), loads
+  resumable/completed runs, serves until SIGTERM/`/shutdown`. Honours
+  `EEI_BASE_DIR`.
+- `daemon/lifecycle.py` — `connect_or_spawn()`: reuse live daemon, respawn
+  on stale rendezvous, cold-spawn otherwise; frozen build execs the
+  `eei-daemon` sidecar.
+
+Not done yet (the remaining integration, best done as its own session with
+the user testing each step — it changes the app's core runtime model, so
+it must not destabilise the working GUI the pending migrations depend on):
+1. **GUI swap** — app.py still uses an in-process RunManager. Replace with
+   `connect_or_spawn()` + DaemonClient; poll `GET /runs`; wizard/resume/bulk
+   post credentials to `/plan`+`/start` instead of opening IMAP in-process.
+   Passwords stay per-request (keychain autofill already in place).
+2. **PyInstaller sidecar** — `pyinstaller --onefile` the daemon per OS in
+   CI, drop `eei-daemon` into the bundle (macOS `Contents/MacOS`, Windows
+   install dir); the existing macOS sign-everything step must cover it.
+3. **Autostart at login** — install a launchd agent / HKCU Run key on first
+   GUI launch (user chose always-on, Settings can disable).
+
 ## Risks
 - PyInstaller binary size (~15-25 MB/OS) and one more moving part in CI.
 - Two processes to keep honest about versions (daemon refuses mismatched
