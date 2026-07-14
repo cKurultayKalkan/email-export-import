@@ -432,9 +432,21 @@ def build_bulk(
     }
 
 
+def _normalize_folders(plan) -> list[dict]:
+    """Accept either a PlanResult (in-process) or an already-normalized list of
+    {source,dest,count,create} dicts (daemon wire), so the plan view renders
+    from whichever backend built it."""
+    if isinstance(plan, list):
+        return plan
+    return [{"source": p.source, "dest": p.dest,
+             "count": plan.counts.get(p.source, 0),
+             "create": bool(getattr(p, "create", False))}
+            for p in plan.plans]
+
+
 def build_plan(
     i18n: I18n,
-    plan: PlanResult,
+    plan,  # PlanResult | list[dict]
     skip: set[str],
     workers: int,
     spool: bool,
@@ -444,19 +456,21 @@ def build_plan(
     on_start: Callable[[], None],
     on_back: Callable[[], None],
 ) -> ft.View:
+    folders = _normalize_folders(plan)
     rows = [
         ft.DataRow(
             cells=[
                 ft.DataCell(ft.Checkbox(
-                    value=p.source not in skip,
-                    on_change=lambda e, s=p.source: on_toggle(s, e.control.value),
+                    value=f["source"] not in skip,
+                    on_change=lambda e, s=f["source"]: on_toggle(s, e.control.value),
                 )),
-                ft.DataCell(ft.Text(p.source)),
-                ft.DataCell(ft.Text(str(plan.counts.get(p.source, 0)))),
-                ft.DataCell(ft.Text(p.dest + (" " + i18n.t("plan.new_folder") if p.create else ""))),
+                ft.DataCell(ft.Text(f["source"])),
+                ft.DataCell(ft.Text(str(f["count"]))),
+                ft.DataCell(ft.Text(f["dest"] + (" " + i18n.t("plan.new_folder")
+                                                 if f.get("create") else ""))),
             ]
         )
-        for p in plan.plans
+        for f in folders
     ]
     table = ft.DataTable(
         columns=[
@@ -468,7 +482,7 @@ def build_plan(
         rows=rows,
     )
     selected_total = sum(
-        plan.counts.get(p.source, 0) for p in plan.plans if p.source not in skip
+        f["count"] for f in folders if f["source"] not in skip
     )
     workers_dd = ft.Dropdown(
         label=i18n.t("plan.workers"),

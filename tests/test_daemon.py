@@ -180,3 +180,25 @@ def test_plan_reports_a_connection_failure(daemon, monkeypatch):
             {"host": "dst.test", "email": "b@y", "password": "p"},
             skip=[],
         )
+
+
+def test_test_connection_endpoint(daemon, monkeypatch):
+    from email_export_import import connection
+    from tests.fakes import FakeIMAPClient
+
+    server, _ = daemon
+    ok_fake = FakeIMAPClient()
+    monkeypatch.setattr(connection.time, "sleep", lambda s: None)
+    monkeypatch.setattr(connection, "IMAPClient",
+                        lambda host, port=993, ssl=True, **kw: ok_fake)
+    res = _client(server).test_connection(
+        {"host": "h.test", "port": 993, "ssl": True, "email": "a@x", "password": "p"})
+    assert res["ok"] is True
+
+    bad = FakeIMAPClient()
+    bad.login_error = __import__("imapclient").exceptions.LoginError("AUTHENTICATIONFAILED")
+    monkeypatch.setattr(connection, "IMAPClient",
+                        lambda host, port=993, ssl=True, **kw: bad)
+    res = _client(server).test_connection(
+        {"host": "h.test", "email": "a@x", "password": "wrong"})
+    assert res["ok"] is False and res["kind"] == "auth"

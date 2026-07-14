@@ -110,6 +110,18 @@ class _Handler(BaseHTTPRequestHandler):
                     setattr(m, field, int(body[field]))
             return self._send(200, {"ok": True})
 
+        if self.path == "/placeholder":
+            se, de = body["src_email"], body["dst_email"]
+            key = f"{se}__{de}"
+            srv_m = self._server.manager
+            run = srv_m.get(key)
+            if run is None or not run.is_active:
+                state = MigrationState.for_pair(se, de, base_dir=srv_m.state_dir)
+                srv_m.add(Run.placeholder(state, state_dir=srv_m.state_dir))
+            return self._send(200, {"ok": True, "key": key})
+
+        if self.path == "/test-connection":
+            return self._do_test(body)
         if self.path == "/plan":
             return self._do_plan(body)
         if self.path == "/start":
@@ -139,6 +151,16 @@ class _Handler(BaseHTTPRequestHandler):
 
         return self._send(404, {"error": "not found"})
 
+    def _do_test(self, body: dict):
+        # Validate credentials without holding the connection: connect, then
+        # close. The real connect happens at /plan.
+        res = self._server.controller.test_connection(_account(body["account"]))
+        if res.ok:
+            res.conn.close()
+            return self._send(200, {"ok": True})
+        return self._send(200, {"ok": False, "kind": res.kind,
+                                "message": res.message})
+
     def _do_plan(self, body: dict):
         srv = self._server
         try:
@@ -165,7 +187,9 @@ class _Handler(BaseHTTPRequestHandler):
             "plan_id": plan_id,
             "total": plan.total,
             "folders": [{"source": p.source, "dest": p.dest,
-                         "count": plan.counts.get(p.source, 0)} for p in plan.plans],
+                         "count": plan.counts.get(p.source, 0),
+                         "create": bool(getattr(p, "create", False))}
+                        for p in plan.plans],
         })
 
     def _do_start(self, body: dict):

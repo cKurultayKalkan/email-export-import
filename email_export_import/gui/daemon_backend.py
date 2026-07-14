@@ -111,9 +111,20 @@ class DaemonBackend:
         self._client.set_settings({"rate_limit": n})
 
     # ---- start flow (daemon owns the connections) ----
+    def test_connection(self, account: dict) -> dict:
+        """Validate credentials. Returns {ok, kind, message} — the same shape
+        LocalBackend returns, so the wizard treats both identically."""
+        return self._client.test_connection(account)
+
+    def add_placeholder(self, src_email: str, dst_email: str) -> str:
+        """A queued card for a bulk account before its connect starts."""
+        return self._client.add_placeholder(src_email, dst_email)
+
     def plan(self, src: dict, dst: dict, skip: list) -> dict:
+        """{plan_id, total, folders:[{source,dest,count}]} — normalized so the
+        plan view renders from either backend unchanged."""
         return self._client.plan(src, dst, skip)
 
     def start(self, plan_id: str, skip: list, workers: int,
-              spool: bool = False) -> str:
+              spool: bool = False, title: str | None = None) -> str:
         return self._client.start(plan_id, skip, workers, spool)["key"]

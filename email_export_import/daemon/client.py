@@ -69,6 +69,13 @@ class DaemonClient:
     def set_settings(self, settings: dict) -> None:
         self._request("POST", "/settings", settings)
 
+    def test_connection(self, account: dict) -> dict:
+        return self._request("POST", "/test-connection", {"account": account})
+
+    def add_placeholder(self, src_email: str, dst_email: str) -> str:
+        return self._request("POST", "/placeholder",
+                             {"src_email": src_email, "dst_email": dst_email})["key"]
+
     def plan(self, src: dict, dst: dict, skip: list) -> dict:
         """Connect + build a folder plan. src/dst carry the password in memory
         only — the daemon holds the live connections until start()."""
