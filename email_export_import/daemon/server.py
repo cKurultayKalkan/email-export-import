@@ -10,10 +10,23 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from ..gui.run_manager import RunManager
+from ..models import Account
+from ..state import MigrationState
+from ..gui.controller import Controller
+from ..gui.run_manager import Run, RunManager
+
+
+def _account(cfg: dict) -> Account:
+    return Account(
+        host=cfg["host"], port=int(cfg.get("port", 993)),
+        ssl=bool(cfg.get("ssl", True)), email=cfg["email"],
+        password=cfg.get("password", ""),
+        verify_ssl=bool(cfg.get("verify_ssl", True)),
+    )
 
 
 def _snapshot_dict(snap) -> dict:
@@ -89,6 +102,11 @@ class _Handler(BaseHTTPRequestHandler):
                     setattr(m, field, int(body[field]))
             return self._send(200, {"ok": True})
 
+        if self.path == "/plan":
+            return self._do_plan(body)
+        if self.path == "/start":
+            return self._do_start(body)
+
         if self.path == "/shutdown":
             self._send(200, {"ok": True})
             self._server.request_stop()
@@ -113,6 +131,57 @@ class _Handler(BaseHTTPRequestHandler):
 
         return self._send(404, {"error": "not found"})
 
+    def _do_plan(self, body: dict):
+        srv = self._server
+        try:
+            src = srv.controller.test_connection(_account(body["src"]))
+            if not src.ok:
+                return self._send(400, {"error": src.message or "source failed",
+                                        "kind": src.kind})
+            try:
+                dst = srv.controller.test_connection(_account(body["dst"]))
+                if not dst.ok:
+                    src.conn.close()
+                    return self._send(400, {"error": dst.message or "dest failed",
+                                            "kind": dst.kind})
+                skip = set(body.get("skip", []))
+                plan = srv.controller.build_plan(src.conn, dst.conn, skip)
+            except Exception:
+                src.conn.close()
+                raise
+        except Exception as exc:  # noqa: BLE001
+            return self._send(400, {"error": str(exc)})
+        plan_id = secrets.token_urlsafe(12)
+        srv.pending_plans[plan_id] = (src.conn, dst.conn, plan, skip)
+        return self._send(200, {
+            "plan_id": plan_id,
+            "total": plan.total,
+            "folders": [{"source": p.source, "dest": p.dest,
+                         "count": plan.counts.get(p.source, 0)} for p in plan.plans],
+        })
+
+    def _do_start(self, body: dict):
+        srv = self._server
+        held = srv.pending_plans.pop(body.get("plan_id", ""), None)
+        if held is None:
+            return self._send(404, {"error": "unknown or expired plan"})
+        src_conn, dst_conn, plan, default_skip = held
+        skip = set(body.get("skip", default_skip))
+        workers = int(body.get("workers", srv.manager.default_workers()))
+        spool = bool(body.get("spool", False))
+        active = [p for p in plan.plans if p.source not in skip]
+        total = sum(plan.counts.get(p.source, 0) for p in active)
+        se, de = src_conn.account.email, dst_conn.account.email
+        key = f"{se}__{de}"
+        state = MigrationState.for_pair(se, de, base_dir=srv.manager.state_dir)
+        run = Run(key=key, title=f"{se} → {de}", src_conn=src_conn, dst_conn=dst_conn,
+                  plans=active, state=state, workers=workers, total=total, skip=skip,
+                  spool_enabled=spool, rate_limit=srv.manager.rate_limit,
+                  state_dir=srv.manager.state_dir)
+        srv.manager.add(run)
+        run.start()
+        return self._send(200, {"ok": True, "key": key})
+
 
 class DaemonServer:
     """Wraps a RunManager in a threaded loopback HTTP server."""
@@ -121,6 +190,9 @@ class DaemonServer:
                  port: int = 0, token: str = "") -> None:
         self.manager = manager
         self.token = token
+        self.controller = Controller(state_dir=manager.state_dir)
+        # plan_id -> (src_conn, dst_conn, PlanResult, skip) awaiting /start.
+        self.pending_plans: dict = {}
         self._httpd = ThreadingHTTPServer((host, port), _Handler)
         self._httpd.daemon = self  # type: ignore[attr-defined]
         self._thread: threading.Thread | None = None

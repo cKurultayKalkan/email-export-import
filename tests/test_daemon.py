@@ -5,6 +5,7 @@ GUI; the GUI talks to it through DaemonClient. Here both live in-process but
 communicate over a real 127.0.0.1 socket, exercising the HTTP + token layer.
 """
 import json
+import time
 
 import pytest
 
@@ -121,3 +122,61 @@ def test_rendezvous_file_is_written_and_private(tmp_path, monkeypatch):
     c = DaemonClient(f"http://127.0.0.1:{info['port']}", token=info["token"])
     assert c.is_alive()
     c.shutdown()
+
+
+def test_plan_then_start_runs_a_migration(daemon, tmp_path, monkeypatch):
+    # The daemon owns the whole connect -> plan -> start flow: the GUI posts
+    # credentials (held in memory only), gets a folder plan back keyed by a
+    # plan id, then starts the run by that id.
+    from email_export_import import connection
+    from tests.fakes import FakeIMAPClient, make_message
+
+    server, manager = daemon
+    src = FakeIMAPClient(folders={"INBOX": [make_message(uid=1, message_id="<m1@x>")]})
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    monkeypatch.setattr(connection.time, "sleep", lambda s: None)
+    monkeypatch.setattr(
+        connection, "IMAPClient",
+        lambda host, port=993, ssl=True, **kw: src if host == "src.test" else dst,
+    )
+
+    c = _client(server)
+    plan = c.plan(
+        {"host": "src.test", "port": 993, "ssl": True, "verify_ssl": True,
+         "email": "a@x", "password": "p"},
+        {"host": "dst.test", "port": 993, "ssl": True, "verify_ssl": True,
+         "email": "b@y", "password": "p"},
+        skip=[],
+    )
+    assert plan["total"] == 1
+    assert "plan_id" in plan
+
+    started = c.start(plan["plan_id"], skip=[], workers=1, spool=False)
+    key = started["key"]
+    for _ in range(200):
+        s = next((r for r in c.runs() if r["key"] == key), None)
+        if s and s["status"] in ("done", "error"):
+            break
+        time.sleep(0.02)
+    s = next(r for r in c.runs() if r["key"] == key)
+    assert s["status"] == "done"
+    assert s["processed"] == 1
+
+
+def test_plan_reports_a_connection_failure(daemon, monkeypatch):
+    from email_export_import import connection
+    from tests.fakes import FakeIMAPClient
+
+    server, _ = daemon
+    bad = FakeIMAPClient()
+    bad.login_error = __import__("imapclient").exceptions.LoginError("AUTHENTICATIONFAILED")
+    monkeypatch.setattr(connection.time, "sleep", lambda s: None)
+    monkeypatch.setattr(connection, "IMAPClient",
+                        lambda host, port=993, ssl=True, **kw: bad)
+
+    with pytest.raises(DaemonError):
+        _client(server).plan(
+            {"host": "src.test", "email": "a@x", "password": "p"},
+            {"host": "dst.test", "email": "b@y", "password": "p"},
+            skip=[],
+        )

@@ -69,5 +69,17 @@ class DaemonClient:
     def set_settings(self, settings: dict) -> None:
         self._request("POST", "/settings", settings)
 
+    def plan(self, src: dict, dst: dict, skip: list) -> dict:
+        """Connect + build a folder plan. src/dst carry the password in memory
+        only — the daemon holds the live connections until start()."""
+        return self._request("POST", "/plan",
+                             {"src": src, "dst": dst, "skip": skip})
+
+    def start(self, plan_id: str, skip: list, workers: int,
+              spool: bool = False) -> dict:
+        return self._request("POST", "/start",
+                             {"plan_id": plan_id, "skip": skip,
+                              "workers": workers, "spool": spool})
+
     def shutdown(self) -> None:
         self._request("POST", "/shutdown")
