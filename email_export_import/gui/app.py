@@ -7,6 +7,7 @@ from pathlib import Path
 import flet as ft
 
 from .. import __version__
+from .. import secrets_store
 from ..models import Account
 from ..state import MigrationState
 from . import prefs
@@ -287,9 +288,26 @@ def _page_main(page: ft.Page) -> None:
         if run is None:
             return
         cfg = run.state.config or {}
+        src_cfg, dst_cfg = cfg.get("src", {}), cfg.get("dst", {})
+        # Pre-fill from the OS keychain if the user chose to remember before.
+        src_saved = secrets_store.get_password(
+            src_cfg.get("host", ""), src_cfg.get("email", ""), "source") or ""
+        dst_saved = secrets_store.get_password(
+            dst_cfg.get("host", ""), dst_cfg.get("email", ""), "dest") or ""
 
-        def submit(src_pw: str, dst_pw: str) -> None:
+        def submit(src_pw: str, dst_pw: str, remember: bool) -> None:
             pop_dialog()
+            if remember:
+                secrets_store.save_password(
+                    src_cfg.get("host", ""), src_cfg.get("email", ""), "source", src_pw)
+                secrets_store.save_password(
+                    dst_cfg.get("host", ""), dst_cfg.get("email", ""), "dest", dst_pw)
+            else:
+                # Unticking forgets any previously stored password for this pair.
+                secrets_store.delete_password(
+                    src_cfg.get("host", ""), src_cfg.get("email", ""), "source")
+                secrets_store.delete_password(
+                    dst_cfg.get("host", ""), dst_cfg.get("email", ""), "dest")
             # Reconnecting + reading folders can take a while on a slow or
             # rate-limiting server — show the spinner so it never looks frozen.
             show_loading(True, i18n.t("account.testing"))
@@ -300,7 +318,12 @@ def _page_main(page: ft.Page) -> None:
             )
 
         show_dialog(
-            views.build_password_dialog(i18n, run.title, submit, lambda: pop_dialog())
+            views.build_password_dialog(
+                i18n, run.title, submit, lambda: pop_dialog(),
+                src_prefill=src_saved, dst_prefill=dst_saved,
+                can_remember=secrets_store.available(),
+                remember_default=bool(src_saved or dst_saved),
+            )
         )
 
     def _reconnect_and_build(cfg: dict, src_pw: str, dst_pw: str):

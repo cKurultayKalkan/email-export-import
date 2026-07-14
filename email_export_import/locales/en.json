@@ -21,6 +21,7 @@
   "resume.src_password": "Source password",
   "resume.dst_password": "Destination password",
   "resume.go": "Resume",
+  "resume.remember": "Remember passwords in this computer's keychain",
   "resume.cancel": "Cancel",
   "cancel.confirm_title": "Cancel this migration?",
   "cancel.confirm_body": "Progress so far is saved — you can resume later and it continues where it left off, without duplicates.",

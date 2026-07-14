@@ -965,3 +965,86 @@ def test_toolbar_context_action_on_plan_screen(monkeypatch, tmp_path):
     # the plan is a modal dialog now — Start lives there, not in the toolbar
     labels = [lbl for lbl, _ in _clickables(page.dialog)]
     assert labels.count(EN("plan.start")) == 1
+
+
+def test_resume_remembers_and_prefills_passwords(monkeypatch, tmp_path):
+    # With "remember" ticked, the passwords go to the OS keychain wrapper;
+    # a later resume of the same pair pre-fills them. Uses a fake store so no
+    # real keychain is touched.
+    from email_export_import import secrets_store
+    from email_export_import.gui import app as app_module
+
+    store: dict = {}
+    monkeypatch.setattr(secrets_store, "available", lambda: True)
+    monkeypatch.setattr(secrets_store, "save_password",
+                        lambda h, e, r, pw: store.__setitem__((h, e, r), pw) or True)
+    monkeypatch.setattr(secrets_store, "get_password",
+                        lambda h, e, r: store.get((h, e, r)))
+    monkeypatch.setattr(secrets_store, "delete_password",
+                        lambda h, e, r: store.pop((h, e, r), None))
+    # patch the module the app imported it under too
+    monkeypatch.setattr(app_module, "secrets_store", secrets_store)
+
+    _make_paused_session(tmp_path)
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    monkeypatch.setattr(
+        connection, "IMAPClient",
+        lambda host, port=993, ssl=True, **kw: (
+            FakeIMAPClient(folders={"INBOX": [make_message(uid=1, message_id="<m1@x>")]})
+            if host == "src.test" else dst
+        ),
+    )
+
+    page = _run_page()
+    assert _click(page.views[-1], EN("dash.resume"))
+    # the remember checkbox is offered (a store is available)
+    labels = _texts_of_dialog(page.dialog)
+    assert EN("resume.remember") in labels
+    fields = _text_fields(page.dialog)
+    fields[0].value = "srcpw"
+    fields[1].value = "dstpw"
+    _tick(page.dialog, EN("resume.remember"))
+    assert _click(page.dialog, EN("resume.go"))
+    assert _wait(lambda: ("src.test", "a@x.com", "source") in store)
+    assert store[("dst.test", "b@y.com", "dest")] == "dstpw"
+
+    # a fresh resume dialog now pre-fills from the store
+    _wait(lambda: page.views and page.views[-1].route == "/" or page.dialog is None)
+    page2 = _run_page()
+    assert _click(page2.views[-1], EN("dash.resume"))
+    fields2 = _text_fields(page2.dialog)
+    assert fields2[0].value == "srcpw"
+    assert fields2[1].value == "dstpw"
+
+
+def _texts_of_dialog(dlg):
+    out = []
+
+    def walk(c):
+        v = getattr(c, "value", None) or getattr(c, "label", None)
+        if isinstance(v, str):
+            out.append(v)
+        for ch in getattr(c, "controls", []) or []:
+            walk(ch)
+        content = getattr(c, "content", None)
+        if content is not None and not isinstance(content, str):
+            walk(content)
+
+    walk(getattr(dlg, "content", None))
+    return out
+
+
+def _tick(dlg, label):
+    def walk(c):
+        if isinstance(c, ft.Checkbox) and c.label == label:
+            c.value = True
+            return True
+        for ch in getattr(c, "controls", []) or []:
+            if walk(ch):
+                return True
+        content = getattr(c, "content", None)
+        if content is not None and not isinstance(content, str):
+            return walk(content)
+        return False
+
+    return walk(getattr(dlg, "content", None))

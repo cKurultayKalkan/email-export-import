@@ -843,25 +843,41 @@ def build_detail(
 def build_password_dialog(
     i18n: I18n,
     title: str,
-    on_submit: Callable[[str, str], None],
+    on_submit: Callable[..., None],
     on_cancel: Callable[[], None],
+    src_prefill: str = "",
+    dst_prefill: str = "",
+    can_remember: bool = False,
+    remember_default: bool = False,
 ) -> ft.AlertDialog:
     src_pw = ft.TextField(
-        label=i18n.t("resume.src_password"), password=True, can_reveal_password=True
+        label=i18n.t("resume.src_password"), password=True, can_reveal_password=True,
+        value=src_prefill,
     )
     dst_pw = ft.TextField(
-        label=i18n.t("resume.dst_password"), password=True, can_reveal_password=True
+        label=i18n.t("resume.dst_password"), password=True, can_reveal_password=True,
+        value=dst_prefill,
     )
+    content = [ft.Text(title, size=12), src_pw, dst_pw]
+    remember = None
+    if can_remember:
+        # Only offered when a secure OS keychain is actually present. Default
+        # off (the user opts in per the security model).
+        remember = ft.Checkbox(label=i18n.t("resume.remember"),
+                               value=remember_default)
+        content.append(remember)
+
+    def submit() -> None:
+        on_submit(src_pw.value or "", dst_pw.value or "",
+                  bool(remember.value) if remember is not None else False)
+
     return ft.AlertDialog(
         modal=True,
         title=ft.Text(i18n.t("resume.title")),
-        content=ft.Column([ft.Text(title, size=12), src_pw, dst_pw], tight=True, spacing=8),
+        content=ft.Column(content, tight=True, spacing=8),
         actions=[
             ft.TextButton(i18n.t("resume.cancel"), on_click=lambda e: on_cancel()),
-            ft.FilledButton(
-                i18n.t("resume.go"),
-                on_click=lambda e: on_submit(src_pw.value or "", dst_pw.value or ""),
-            ),
+            ft.FilledButton(i18n.t("resume.go"), on_click=lambda e: submit()),
         ],
     )
 

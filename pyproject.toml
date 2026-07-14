@@ -19,6 +19,7 @@ dependencies = [
     # macOS menu-bar (status item) icon for the packaged app. pystray pulls
     # Pillow and the pyobjc frameworks it needs on darwin.
     "pystray>=0.19 ; sys_platform == 'darwin'",
+    "keyring>=25.7.0",
 ]
 
 [project.scripts]
