@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.14 — 2026-07-15
+
+### Added
+- **Migrations now survive the app closing.** A small headless daemon runs
+  the transfers in its own process; the app is a client to it. Close the
+  window and transfers keep going — the app lives on as the menu-bar icon
+  (macOS), and reopening reconnects to what's already running. The daemon
+  starts automatically at login (a Settings switch turns this off). If the
+  daemon can't start for any reason, the app falls back to running
+  transfers in-process, exactly as before. Passwords still cross only in
+  memory, never written — the daemon holds them per run.
+- **Remember passwords (opt-in).** The resume dialog can save a pair's
+  passwords in the OS keychain (macOS Keychain via the system `security`
+  tool; Windows Credential Manager / Linux Secret Service via keyring) and
+  pre-fills them next time. Off by default; unticking forgets them; it
+  degrades to always-prompting when no secure store is available.
+
 ## v0.1.13 — 2026-07-14
 
 ### Changed
