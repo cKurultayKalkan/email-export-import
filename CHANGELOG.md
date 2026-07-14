@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.15 — 2026-07-15
+
+### Fixed
+- **Blank window on startup (seen on Windows).** The daemon-backend settings
+  push and the autostart install ran outside the startup guard, so a daemon
+  HTTP hiccup or a registry error could crash the app before its first
+  render. The whole daemon path now falls back to running in-process on any
+  error, and autostart can never block startup — the window always renders.
+
 ## v0.1.14 — 2026-07-15
 
 ### Added
