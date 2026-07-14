@@ -40,27 +40,35 @@ class WizardState:
     resume_title: str | None = None
 
 
-def _make_backend(prefs_values: dict):
-    """Prefer the out-of-process daemon (migrations survive the GUI closing);
-    fall back to the in-process backend if it can't be reached, so the app
-    always works even when the daemon can't start."""
-    from ..daemon.lifecycle import connect_or_spawn
-
-    try:
-        client = connect_or_spawn(timeout=8)
-    except Exception:
-        client = None
-    if client is not None:
-        backend = DaemonBackend(client)
-    else:
-        manager = RunManager()
-        manager.load_resumable()
-        manager.load_completed()
-        backend = LocalBackend(manager, Controller())
+def _local_backend(prefs_values: dict):
+    manager = RunManager()
+    manager.load_resumable()
+    manager.load_completed()
+    backend = LocalBackend(manager, Controller())
     backend.set_max_active(prefs_values.get("max_active", 2))
     backend.set_workers(prefs_values.get("workers", 4))
     backend.set_rate_limit(prefs_values.get("rate_limit", 0))
     return backend
+
+
+def _make_backend(prefs_values: dict):
+    """Prefer the out-of-process daemon (migrations survive the GUI closing);
+    fall back to the in-process backend if ANYTHING about the daemon path
+    fails — spawn, connect, or the initial settings push. Startup must never
+    crash to a blank window over the daemon; the app always works in-process."""
+    try:
+        from ..daemon.lifecycle import connect_or_spawn
+
+        client = connect_or_spawn(timeout=8)
+        if client is not None:
+            backend = DaemonBackend(client)
+            backend.set_max_active(prefs_values.get("max_active", 2))
+            backend.set_workers(prefs_values.get("workers", 4))
+            backend.set_rate_limit(prefs_values.get("rate_limit", 0))
+            return backend
+    except Exception:
+        pass  # any daemon trouble → run in-process instead
+    return _local_backend(prefs_values)
 
 
 def main() -> None:
@@ -75,8 +83,11 @@ def _page_main(page: ft.Page) -> None:
     # The user chose always-on; install once on first launch, then respect the
     # Settings toggle. Only meaningful for the daemon backend.
     if isinstance(backend, DaemonBackend) and not _prefs.get("autostart_done"):
-        from ..daemon import autostart
-        autostart.install()
+        try:
+            from ..daemon import autostart
+            autostart.install()
+        except Exception:
+            pass  # autostart is a convenience; never let it block startup
         prefs.save_pref(i18n._prefs_path, "autostart_done", True)
     ws = WizardState()
     highlight: list[str | None] = [None]
