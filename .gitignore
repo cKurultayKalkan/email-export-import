@@ -4,6 +4,3 @@ __pycache__/
 dist/
 build/
 .pytest_cache/
-
-# Local Claude Code tooling (agents/skills) — not part of the project
-.claude/
