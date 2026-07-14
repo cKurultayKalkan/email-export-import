@@ -51,6 +51,24 @@ jobs:
           # wrong-version Python), .git (the entire history), tests, docs.
           yes | uv run flet build ${{ matrix.target }} --project email-export-import \
             --exclude .venv .git .github .superpowers .pytest_cache tests docs packaging
+      - name: Build the daemon sidecar (eei-daemon)
+        shell: bash
+        run: |
+          # The GUI spawns this headless binary so migrations outlive it.
+          # PyInstaller one-file; absolute-import launcher keeps the package
+          # context intact in the frozen build.
+          uv run --with pyinstaller pyinstaller --onefile --name eei-daemon \
+            --paths . \
+            --hidden-import keyring.backends.macOS \
+            --hidden-import keyring.backends.Windows \
+            --hidden-import keyring.backends.SecretService \
+            -y --distpath sidecar-dist eei_daemon.py
+          # Place it where lifecycle._spawn looks: next to the app executable.
+          case "$RUNNER_OS" in
+            macOS)   cp sidecar-dist/eei-daemon build/macos/*.app/Contents/MacOS/ ;;
+            Windows) cp sidecar-dist/eei-daemon.exe build/windows/ ;;
+            Linux)   cp sidecar-dist/eei-daemon build/linux/ ;;
+          esac
       # ---- macOS code signing + notarization (skipped when secrets are absent,
       # e.g. on forks — the build then ships ad-hoc-signed, exactly as before).
       - name: Import signing certificate
@@ -125,8 +143,12 @@ jobs:
           PY
           rm -rf "$UNPACK"
           # 2) every loose Mach-O in the bundle (python.bundle stdlib .so files,
-          #    Python.framework dylibs, plugin dylibs, helper executables).
+          #    Python.framework dylibs, plugin dylibs, helper executables) plus
+          #    the daemon sidecar sitting next to the main executable.
           sign_all_machos_under "$APP/Contents/Frameworks"
+          codesign --force --options runtime --timestamp \
+            --entitlements packaging/macos-entitlements.plist \
+            -s "$IDENTITY" "$APP/Contents/MacOS/eei-daemon"
           # 3) the frameworks themselves, then the app, inside-out.
           for fw in "$APP"/Contents/Frameworks/*.framework; do
             codesign --force --options runtime --timestamp -s "$IDENTITY" "$fw"
