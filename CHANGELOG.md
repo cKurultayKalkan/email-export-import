@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.13 — 2026-07-14
+
+### Changed
+- **Single-window desktop model, completed.** New migration, Bulk migration
+  and the folder plan now open as modal dialogs over the main window instead
+  of navigating to separate pages; resume reuses the same plan dialog. The
+  app is one master-detail window with dialogs, the way a desktop tool
+  behaves — no page stack, nothing to navigate "back" through.
+
 ## v0.1.12 — 2026-07-14
 
 ### Fixed
