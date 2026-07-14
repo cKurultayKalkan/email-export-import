@@ -5,7 +5,7 @@ import queue
 import threading
 from typing import Callable
 
-from .connection import MailConnection
+from .connection import append_with_patience, MailConnection
 from .errors import QuotaExceeded
 from .models import FolderPlan, TransferProgress
 from .spool import MessageSpool
@@ -183,7 +183,9 @@ def _process_unit(
                 throttle.acquire(len(body), cancel=stop)
             try:
                 dst.with_retry(
-                    lambda c: c.append(plan.dest, body, flags=flags, msg_time=internaldate)
+                    lambda c: append_with_patience(
+                        c, plan.dest, body, flags, internaldate
+                    )
                 )
             except Exception as exc:
                 # Quota classification applies only to the destination APPEND.

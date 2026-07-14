@@ -117,6 +117,27 @@ class _PacedSocket:
             time.sleep(self._PAUSE)  # let the queue drain before the next slice
 
 
+def append_with_patience(client, dest: str, body, flags, msg_time):
+    """APPEND with a socket timeout scaled to the message size.
+
+    Writing a 30 MB message at the hard 2 MB/s ceiling takes ~15 s by itself,
+    and some destination servers then block while fsyncing the mailbox. The
+    fixed 60 s socket timeout was killing such appends mid-flight, and the
+    retry started them over — an endless loop on every oversized message."""
+    sock = getattr(getattr(client, "_imap", None), "sock", None)
+    if sock is None:  # test fakes / exotic transports: no socket to tune
+        return client.append(dest, body, flags=flags, msg_time=msg_time)
+    old = sock.gettimeout()
+    sock.settimeout(max(SOCKET_TIMEOUT, 60 + len(body) / (256 * 1024)))
+    try:
+        return client.append(dest, body, flags=flags, msg_time=msg_time)
+    finally:
+        try:
+            sock.settimeout(old)
+        except Exception:
+            pass
+
+
 def _install_hard_ceiling(client: IMAPClient) -> None:
     """Best-effort like _cap_send_buffer, but on any real connection this
     succeeds; the guard is for exotic transports in tests."""

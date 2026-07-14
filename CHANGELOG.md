@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.12 — 2026-07-14
+
+### Fixed
+- **A run can no longer call itself done while messages are missing.** A
+  field incident left 22 mails across two "completed" accounts silently
+  behind a green tick (a mid-resume SELECT hiccup put three folders into
+  the failure list, and the run finished "done" anyway). Now: a finished
+  run with any failure lands in red "incomplete" with the counts and
+  folders named, stays resumable, and an end-of-run completeness check
+  proves every message seen at planning time was actually handled.
+- **Oversized messages no longer stall forever**: APPEND now gets a socket
+  timeout scaled to the message size (a 30 MB mail at the safety ceiling
+  needs minutes, and some servers block while fsyncing — the fixed 60 s
+  timeout kept killing and restarting the same upload).
+- Honest progress numbers: restored runs count every handled message
+  (including deduplicated and already-present ones), so a fully migrated
+  mailbox reads 2621/2621, not 2611/2621.
+
+### Added
+- **Hard, non-configurable safety ceilings** against the macOS kernel
+  panic seen under sustained upload with TSO + content-filter software:
+  every connection writes in 64 KB slices with drain pauses (2 MB/s per
+  connection), and all connections together share an 8 MB/s process-wide
+  budget. No setting can raise these; the user rate limit only lowers them.
+- **Results that survive restarts**: each run persists its outcome
+  (migrated / skipped / failed with first failure lines); the side panel
+  shows them plus a per-folder breakdown and the run's duration.
+
 ## v0.1.11 — 2026-07-13
 
 ### Changed

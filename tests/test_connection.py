@@ -460,3 +460,29 @@ def test_every_slice_draws_from_the_global_aggregate_ceiling(monkeypatch):
     connection._PacedSocket(FakeSock()).sendall(b"x" * (200 * 1024))
     assert sum(drawn) == 200 * 1024
     assert max(drawn) <= connection._PacedSocket.CHUNK
+
+
+def test_append_patience_scales_with_message_size():
+    # A 30 MB APPEND takes ~15 s of writing at the hard ceiling alone, and the
+    # destination may fsync for a while after — the fixed 60 s socket timeout
+    # was killing big appends mid-flight, looping the retry forever.
+    from email_export_import import connection
+
+    calls = []
+
+    class FakeSock:
+        def gettimeout(self): return 60
+        def settimeout(self, t): calls.append(t)
+
+    class FakeImap:
+        sock = FakeSock()
+
+    class FakeClient:
+        _imap = FakeImap()
+        def append(self, dest, body, flags=None, msg_time=None):
+            return "ok"
+
+    body = b"x" * (30 * 1024 * 1024)
+    assert connection.append_with_patience(FakeClient(), "INBOX", body, [], None) == "ok"
+    assert calls[0] >= 120, "big append must get proportional patience"
+    assert calls[-1] == 60, "timeout must be restored afterwards"
