@@ -35,18 +35,25 @@ def _client_for(info: dict) -> DaemonClient:
     return DaemonClient(f"http://127.0.0.1:{info['port']}", token=info["token"])
 
 
+def daemon_command() -> list[str]:
+    """The argv to launch the daemon. Detect a packaged build by the presence
+    of the bundled `eei-daemon` sidecar next to the executable — more robust
+    than sys.frozen, which serious_python/flet apps don't reliably set. From
+    source, re-exec this interpreter with -m email_export_import.daemon."""
+    sidecar = Path(sys.executable).with_name(
+        "eei-daemon.exe" if sys.platform == "win32" else "eei-daemon"
+    )
+    if sidecar.exists():
+        return [str(sidecar)]
+    return [sys.executable, "-m", "email_export_import.daemon"]
+
+
 def _spawn(base_dir: Path) -> None:
-    """Launch a detached daemon process. Frozen (packaged) builds run the
-    bundled sidecar binary; from source we re-exec this interpreter with
-    -m email_export_import.daemon."""
+    """Launch a detached daemon process (packaged sidecar or source module)."""
     env = dict(os.environ)
     if base_dir is not None:
         env["EEI_BASE_DIR"] = str(base_dir)
-    if getattr(sys, "frozen", False):
-        exe = Path(sys.executable).with_name("eei-daemon")
-        cmd = [str(exe)]
-    else:
-        cmd = [sys.executable, "-m", "email_export_import.daemon"]
+    cmd = daemon_command()
     subprocess.Popen(  # noqa: S603
         cmd, env=env, stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

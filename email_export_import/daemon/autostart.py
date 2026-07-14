@@ -33,13 +33,11 @@ LINUX_DESKTOP_NAME = "email-export-import-daemon.desktop"
 
 
 def daemon_command() -> list[str]:
-    """The argv that launches the daemon — the SAME resolution lifecycle._spawn
-    uses. Frozen (packaged) builds run the bundled `eei-daemon` sidecar next to
-    the app executable; from source we re-exec this interpreter with
-    ``-m email_export_import.daemon``."""
-    if getattr(sys, "frozen", False):
-        return [str(Path(sys.executable).with_name("eei-daemon"))]
-    return [sys.executable, "-m", "email_export_import.daemon"]
+    """The argv that launches the daemon — delegated to lifecycle so autostart
+    and GUI-spawn always agree (sidecar-existence detection)."""
+    from .lifecycle import daemon_command as _cmd
+
+    return _cmd()
 
 
 # ---- path helpers (home injectable so tests never touch the real HOME) -------
