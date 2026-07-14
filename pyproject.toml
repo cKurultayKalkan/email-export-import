@@ -19,7 +19,10 @@ dependencies = [
     # macOS menu-bar (status item) icon for the packaged app. pystray pulls
     # Pillow and the pyobjc frameworks it needs on darwin.
     "pystray>=0.19 ; sys_platform == 'darwin'",
-    "keyring>=25.7.0",
+    # Password storage: macOS uses the built-in `security` CLI (no dep). Only
+    # Windows/Linux need keyring, and flet doesn't bundle its jaraco.* deps
+    # into the mac app anyway — so scope it off darwin.
+    "keyring>=25.7.0 ; sys_platform != 'darwin'",
 ]
 
 [project.scripts]

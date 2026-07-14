@@ -35,7 +35,7 @@ def fake_backend(monkeypatch):
     # whose Keyring the fake backend is NOT an instance of.
     fail_mod = types.ModuleType("keyring.backends.fail")
     fail_mod.Keyring = type("FailKeyring", (), {})
-    monkeypatch.setattr(secrets_store, "_keyring", lambda: fake)
+    monkeypatch.setattr(secrets_store, "_backend", lambda: fake)
     return fake
 
 
@@ -51,7 +51,7 @@ def test_save_get_delete_round_trip(fake_backend):
 
 
 def test_no_backend_fails_closed(monkeypatch):
-    monkeypatch.setattr(secrets_store, "_keyring", lambda: None)
+    monkeypatch.setattr(secrets_store, "_backend", lambda: None)
     assert secrets_store.available() is False
     assert secrets_store.save_password("h", "a@x", "source", "pw") is False
     assert secrets_store.get_password("h", "a@x", "source") is None
@@ -64,7 +64,7 @@ def test_backend_errors_never_propagate(monkeypatch):
         def get_password(self, *a): raise RuntimeError("keychain locked")
         def delete_password(self, *a): raise RuntimeError("keychain locked")
 
-    monkeypatch.setattr(secrets_store, "_keyring", lambda: Boom())
+    monkeypatch.setattr(secrets_store, "_backend", lambda: Boom())
     assert secrets_store.save_password("h", "a@x", "source", "pw") is False
     assert secrets_store.get_password("h", "a@x", "source") is None
     secrets_store.delete_password("h", "a@x", "source")  # must not raise
@@ -88,4 +88,47 @@ def test_available_false_for_fail_backend(monkeypatch):
     monkeypatch.setitem(sys.modules, "keyring", kr_mod)
     monkeypatch.setitem(sys.modules, "keyring.backends", backends_mod)
     monkeypatch.setitem(sys.modules, "keyring.backends.fail", fail_mod)
+    # force the keyring path (the macOS `security` backend would otherwise win)
+    monkeypatch.setattr(secrets_store._MacSecurity, "available",
+                        staticmethod(lambda: False))
     assert secrets_store.available() is False
+
+
+def test_macos_security_backend_round_trip(monkeypatch):
+    # The macOS backend shells out to `security`; drive it with a fake CLI so
+    # the test never touches the real keychain.
+    import sys as _sys
+
+    from email_export_import import secrets_store as ss
+
+    store = {}
+
+    class FakeCompleted:
+        def __init__(self, rc, out="", err=""):
+            self.returncode, self.stdout, self.stderr = rc, out, err
+
+    def fake_security(*args, input_text=None):
+        cmd = args[0]
+        # parse -a <acct> -s <svc>
+        acct = args[args.index("-a") + 1]
+        svc = args[args.index("-s") + 1]
+        if cmd == "add-generic-password":
+            store[(svc, acct)] = args[args.index("-w") + 1]
+            return FakeCompleted(0)
+        if cmd == "find-generic-password":
+            v = store.get((svc, acct))
+            return FakeCompleted(0, out=v + "\n") if v is not None else FakeCompleted(44)
+        if cmd == "delete-generic-password":
+            store.pop((svc, acct), None)
+            return FakeCompleted(0)
+        return FakeCompleted(1, err="unknown")
+
+    monkeypatch.setattr(ss, "_security", fake_security)
+    monkeypatch.setattr(ss._MacSecurity, "available", staticmethod(lambda: True))
+    monkeypatch.setattr(ss, "sys", type("S", (), {"platform": "darwin"}))
+
+    assert ss.available() is True
+    assert ss.save_password("h", "a@x", "source", "pw123")
+    assert ss.get_password("h", "a@x", "source") == "pw123"
+    ss.delete_password("h", "a@x", "source")
+    assert ss.get_password("h", "a@x", "source") is None
