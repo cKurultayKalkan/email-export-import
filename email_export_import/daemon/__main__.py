@@ -64,4 +64,5 @@ def main(base_dir: Path | None = None) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    _base = os.environ.get("EEI_BASE_DIR")
+    main(base_dir=Path(_base) if _base else None)
