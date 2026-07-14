@@ -37,11 +37,12 @@ def test_view_builders_set_route_and_controls():
     )
     assert dash.route == "/" and isinstance(dash.controls, list)
 
+    import flet as ft
     plan = views.build_plan(
         i18n, PlanResult(plans=[], counts={}, total=0), set(), 4, False,
         noop, noop, noop, noop, noop,
     )
-    assert plan.route == "/plan" and isinstance(plan.controls, list)
+    assert isinstance(plan, ft.AlertDialog)  # the plan is a modal dialog now
 
     detail = views.build_detail(i18n, snap, noop, noop, noop, noop)
     assert detail.route == "/detail" and isinstance(detail.controls, list)

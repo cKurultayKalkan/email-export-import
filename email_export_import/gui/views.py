@@ -256,7 +256,15 @@ def build_account(
             alignment=ft.MainAxisAlignment.END,
         ),
     ]
-    return ft.View(route=f"/{role}", controls=controls, padding=24, spacing=12), {
+    dlg = ft.AlertDialog(
+        modal=True,
+        content=ft.Container(
+            width=480,
+            content=ft.Column(controls, tight=True, spacing=12,
+                              scroll=ft.ScrollMode.AUTO),
+        ),
+    )
+    return dlg, {
         "account": account,
         "preset_key": lambda: preset_dd.value if preset_dd.value != custom_key else None,
         "set_busy": set_busy,
@@ -404,8 +412,15 @@ def build_bulk(
             alignment=ft.MainAxisAlignment.END,
         ),
     ]
-    view = ft.View(route="/bulk", controls=controls, padding=24, spacing=12,
-                   scroll=ft.ScrollMode.AUTO)
+    view = ft.AlertDialog(
+        modal=True,
+        title=ft.Text(i18n.t("bulk.title")),
+        content=ft.Container(
+            width=640,
+            height=460,
+            content=ft.Column(controls, spacing=12, scroll=ft.ScrollMode.AUTO),
+        ),
+    )
     return view, {
         "collect": collect,
         "preset_key": preset_key,
@@ -462,28 +477,31 @@ def build_plan(
         options=[ft.dropdown.Option(str(n)) for n in (1, 2, 4, 8, 16)],
         on_select=lambda e: on_workers(int(e.control.value)),
     )
-    return ft.View(
-        route="/plan",
-        controls=[
-            ft.Text(i18n.t("plan.title"), size=18, weight=ft.FontWeight.BOLD),
-            ft.Column([table], scroll=ft.ScrollMode.AUTO, expand=True),
-            ft.Row([workers_dd, ft.Text(i18n.t("plan.total", count=selected_total))]),
-            ft.Checkbox(
-                label=i18n.t("plan.spool"),
-                value=spool,
-                on_change=lambda e: on_spool(bool(e.control.value)),
-            ),
-            ft.Text(i18n.t("plan.preserve_info"), size=12, italic=True),
-            ft.Row(
+    return ft.AlertDialog(
+        modal=True,
+        title=ft.Text(i18n.t("plan.title")),
+        content=ft.Container(
+            width=560,
+            height=440,
+            content=ft.Column(
                 [
-                    ft.TextButton(i18n.t("account.back"), on_click=lambda e: on_back()),
-                    ft.FilledButton(i18n.t("plan.start"), on_click=lambda e: on_start()),
+                    ft.Column([table], scroll=ft.ScrollMode.AUTO, expand=True),
+                    ft.Row([workers_dd,
+                            ft.Text(i18n.t("plan.total", count=selected_total))]),
+                    ft.Checkbox(
+                        label=i18n.t("plan.spool"),
+                        value=spool,
+                        on_change=lambda e: on_spool(bool(e.control.value)),
+                    ),
+                    ft.Text(i18n.t("plan.preserve_info"), size=12, italic=True),
                 ],
-                alignment=ft.MainAxisAlignment.END,
+                spacing=12,
             ),
+        ),
+        actions=[
+            ft.TextButton(i18n.t("account.back"), on_click=lambda e: on_back()),
+            ft.FilledButton(i18n.t("plan.start"), on_click=lambda e: on_start()),
         ],
-        padding=24,
-        spacing=12,
     )
 
 

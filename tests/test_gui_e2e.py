@@ -187,6 +187,13 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(connection.time, "sleep", lambda s: None)
 
 
+
+
+def _dialog_has(page, label):
+    return page.dialog is not None and any(
+        lbl == label for lbl, _ in _clickables(page.dialog)
+    )
+
 def _run_page():
     from email_export_import.gui import app as app_module
 
@@ -240,7 +247,7 @@ def test_ui_work_is_marshalled_onto_the_event_loop_not_the_executor(monkeypatch,
     fields[1].value = "p"
     tasks_before = len(page.run_task_calls)
     assert _click(page.dialog, EN("resume.go"))
-    assert _wait(lambda: page.views and page.views[-1].route == "/plan"), \
+    assert _wait(lambda: _dialog_has(page, EN("plan.start"))), \
         "resume callback did not render the plan screen"
     assert len(page.run_task_calls) > tasks_before, \
         "resume callback was not marshalled onto the event loop"
@@ -307,13 +314,16 @@ def _all_text_fields(view):
 
     for c in getattr(view, "controls", []) or []:
         walk(c)
+    content = getattr(view, "content", None)  # dialogs hold their form here
+    if content is not None and not isinstance(content, str):
+        walk(content)
     return out
 
 
 def _fill_bulk(page, src_host, dst_host, accounts):
     """On the /bulk view: set source+dest host, add rows, fill each account,
     then click Start all. accounts = [(email, src_pw, dst_pw), ...]."""
-    view = page.views[-1]
+    view = page.dialog
     # add the extra rows (one row exists by default)
     for _ in range(len(accounts) - 1):
         assert _click(view, EN("bulk.add_row"))
@@ -337,7 +347,7 @@ def test_bulk_starts_all_accounts(monkeypatch, tmp_path):
 
     page = _run_page()
     assert _click(page.views[-1], EN("menu.bulk")), "Bulk menu item not found"
-    assert page.views[-1].route == "/bulk"
+    assert _dialog_has(page, EN("bulk.start_all"))
     _fill_bulk(page, "src.test", "dst.test",
                [("a@x.com", "p1", "p1"), ("b@x.com", "p2", "p2")])
 
@@ -415,10 +425,10 @@ def test_sync_a_finished_migration_copies_only_new_mail(monkeypatch, tmp_path):
     fields[0].value = "p"
     fields[1].value = "p"
     _click(page.dialog, EN("resume.go"))
-    assert _wait(lambda: page.views and page.views[-1].route == "/plan"), \
+    assert _wait(lambda: _dialog_has(page, EN("plan.start"))), \
         "sync did not reach the plan screen"
 
-    _click(page.views[-1], EN("plan.start"))
+    _click(page.dialog, EN("plan.start"))
     assert _wait(lambda: len(dst.folders["INBOX"]) == 1), \
         "sync copied nothing (or the wrong count)"
     time.sleep(0.3)  # let any further (wrong) appends land before asserting
@@ -470,7 +480,7 @@ def test_resume_shows_loading_overlay_until_plan_appears(monkeypatch, tmp_path):
         "no loading overlay while resume reconnects — the app looks frozen"
 
     gate.set()
-    assert _wait(lambda: page.views and page.views[-1].route == "/plan")
+    assert _wait(lambda: _dialog_has(page, EN("plan.start")))
     assert overlay.visible is False, "loading overlay not cleared once the plan rendered"
 
 
@@ -503,13 +513,13 @@ def test_resume_success_starts_the_run(monkeypatch, tmp_path):
 
     # Resume now routes through the plan screen (folder selection before
     # transfer). It appears via a callback marshalled onto the event loop.
-    assert _wait(lambda: page.views and page.views[-1].route == "/plan"), \
+    assert _wait(lambda: _dialog_has(page, EN("plan.start"))), \
         "plan screen did not appear after Resume — callback not marshalled/rendered"
     assert len(page.run_task_calls) > calls_before, \
         "resume callback was not marshalled onto the event loop (UI would not render)"
 
     # Starting from the plan screen migrates all 3 messages.
-    assert _click(page.views[-1], EN("plan.start")), "Start button not found on plan screen"
+    assert _click(page.dialog, EN("plan.start")), "Start button not found on plan screen"
     assert _wait(lambda: len(dst.folders["INBOX"]) == 3), \
         "migration did not run after Start"
 
@@ -544,9 +554,9 @@ def test_resume_plan_honors_skip_from_config(monkeypatch, tmp_path):
     fields[0].value = "p"
     fields[1].value = "p"
     _click(page.dialog, EN("resume.go"))
-    assert _wait(lambda: page.views and page.views[-1].route == "/plan")
+    assert _wait(lambda: _dialog_has(page, EN("plan.start")))
 
-    _click(page.views[-1], EN("plan.start"))
+    _click(page.dialog, EN("plan.start"))
     assert _wait(lambda: len(dst.folders["INBOX"]) == 1)
     assert dst.folders["Junk"] == []  # skipped folder never migrated
 
@@ -617,7 +627,7 @@ def test_resume_from_cancelled_card(monkeypatch, tmp_path):
     fields[0].value = "p"
     fields[1].value = "p"
     assert _click(page.dialog, EN("resume.go"))
-    assert _wait(lambda: page.views and page.views[-1].route == "/plan"), \
+    assert _wait(lambda: _dialog_has(page, EN("plan.start"))), \
         "cancelled resume did not reach the plan screen"
 
 
@@ -867,8 +877,8 @@ def test_every_screen_has_the_menubar():
     assert _click(page.dialog, EN("update.close"))
 
     assert _click(page.views[-1], EN("menu.new"))
-    assert page.views[-1].route == "/source"  # wizard starts at the source step
-    assert _menubar_of(page.views[-1]) is not None
+    assert _dialog_has(page, EN("account.test"))  # wizard opens as a dialog
+    assert _click(page.dialog, EN("account.back"))  # close it again
 
 
 def test_menubar_routes_dashboard_bulk_and_updates(monkeypatch):
@@ -879,7 +889,7 @@ def test_menubar_routes_dashboard_bulk_and_updates(monkeypatch):
                         lambda *a, **k: checked.append(True) or None)
     page = _run_page()
     assert _click(page.views[-1], EN("menu.bulk"))
-    assert page.views[-1].route == "/bulk"
+    assert _dialog_has(page, EN("bulk.start_all"))
     assert _click(page.views[-1], EN("menu.dashboard"))
     assert page.views[-1].route == "/"
     before = len(checked)
@@ -925,7 +935,7 @@ def _texts_of(view):
 
 def test_desktop_chrome_toolbar_and_statusbar():
     page = _run_page()
-    view = page.views[-1]
+    view = page.views[-1]  # chrome lives on the main window, not a dialog
     texts = _texts_of(view)
     assert EN("status.ready") in texts, "status bar missing"
     # toolbar carries the core actions as icon+label buttons
@@ -951,6 +961,7 @@ def test_toolbar_context_action_on_plan_screen(monkeypatch, tmp_path):
     fields[0].value = "p"
     fields[1].value = "p"
     assert _click(page.dialog, EN("resume.go"))
-    assert _wait(lambda: page.views and page.views[-1].route == "/plan")
-    labels = [lbl for lbl, _ in _clickables(page.views[-1])]
-    assert labels.count(EN("plan.start")) >= 2  # plan button + toolbar/menu extra
+    assert _wait(lambda: _dialog_has(page, EN("plan.start")))
+    # the plan is a modal dialog now — Start lives there, not in the toolbar
+    labels = [lbl for lbl, _ in _clickables(page.dialog)]
+    assert labels.count(EN("plan.start")) == 1

@@ -580,13 +580,15 @@ def _page_main(page: ft.Page) -> None:
             show_dialog(dialog)
 
         def on_back() -> None:
-            back_to_dashboard() if role == "source" else go_account("source")
+            if role == "source":
+                pop_dialog()  # closing the first step closes the wizard
+            else:
+                go_account("source")
 
-        view, view_handles = views.build_account(i18n, role, initial, on_test, on_back, status)
+        dlg, view_handles = views.build_account(i18n, role, initial, on_test, on_back, status)
         handles.update(view_handles)
-        page.views.clear()
-        page.views.append(_decorate(view))
-        page.update()
+        pop_dialog()  # replace the previous wizard step, if any
+        show_dialog(dlg)
 
     def go_plan() -> None:
         ws.workers = manager.default_workers()
@@ -606,9 +608,9 @@ def _page_main(page: ft.Page) -> None:
     def _render_plan() -> None:
         def on_toggle(source: str, included: bool) -> None:
             (ws.skip.discard if included else ws.skip.add)(source)
-            # counts change → rebuild
-            page.views[-1] = _plan_view()
-            page.update()
+            # counts change → rebuild the dialog
+            pop_dialog()
+            show_dialog(_plan_dialog())
 
         def on_workers(n: int) -> None:
             ws.workers = n
@@ -616,22 +618,18 @@ def _page_main(page: ft.Page) -> None:
         def on_spool(enabled: bool) -> None:
             ws.spool = enabled
 
-        def _plan_view() -> ft.View:
-            back = back_to_dashboard if ws.resume_key else (lambda: go_account("dest"))
-            view = views.build_plan(
+        def _plan_dialog() -> ft.AlertDialog:
+            back = pop_dialog if ws.resume_key else (lambda: go_account("dest"))
+            return views.build_plan(
                 i18n, ws.plan, ws.skip, ws.workers, ws.spool,
                 on_toggle, on_workers, on_spool, start_migration, back,
             )
-            return _decorate(
-                view, [(ft.Icons.PLAY_ARROW, i18n.t("plan.start"), start_migration)],
-                scrollable=False,  # plan has its own expanding scroll table
-            )
 
-        page.views.clear()
-        page.views.append(_plan_view())
-        page.update()
+        pop_dialog()  # replace the account step / previous plan render
+        show_dialog(_plan_dialog())
 
     def start_migration() -> None:
+        pop_dialog()  # the plan dialog
         key = ws.resume_key or f"{ws.src_account.email}__{ws.dst_account.email}"
         existing = manager.get(key)
         if existing is not None and existing.is_active:
@@ -658,12 +656,11 @@ def _page_main(page: ft.Page) -> None:
     # ---- bulk ----------------------------------------------------------
 
     def show_bulk() -> None:
-        view, _handles = views.build_bulk(i18n, on_start=start_bulk, on_back=back_to_dashboard)
-        page.views.clear()
-        page.views.append(_decorate(view))
-        page.update()
+        dlg, _handles = views.build_bulk(i18n, on_start=start_bulk, on_back=pop_dialog)
+        show_dialog(dlg)
 
     def start_bulk(pairs: list, preset_key: str | None) -> None:
+        pop_dialog()  # the bulk dialog
         # Add a queued placeholder card per account immediately, then let the
         # poll pump them onto real runs as slots free (cap = manager.max_active).
         for src, dst in pairs:
