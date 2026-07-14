@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.16 — 2026-07-15
+
+### Fixed / Changed
+- **A startup error now shows itself** instead of a blank window: the app
+  writes the traceback to `~/.email-export-import/crash.log` and displays it
+  on-screen (a packaged app has no console).
+- **The background daemon is macOS-only for now.** It is verified there;
+  Windows and Linux run migrations in-process (the proven path) with no
+  daemon spawn and no startup delay, until the daemon is verified per
+  platform.
+
 ## v0.1.15 — 2026-07-15
 
 ### Fixed

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -51,11 +53,21 @@ def _local_backend(prefs_values: dict):
     return backend
 
 
+def _daemon_enabled() -> bool:
+    # The out-of-process daemon is verified on macOS. On Windows/Linux it is
+    # not yet, and spawning it there has produced startup trouble — so those
+    # platforms run in-process for now (the proven path), no spawn attempt and
+    # no startup delay. Re-enable per platform once each is verified.
+    return sys.platform == "darwin"
+
+
 def _make_backend(prefs_values: dict):
     """Prefer the out-of-process daemon (migrations survive the GUI closing);
     fall back to the in-process backend if ANYTHING about the daemon path
     fails — spawn, connect, or the initial settings push. Startup must never
     crash to a blank window over the daemon; the app always works in-process."""
+    if not _daemon_enabled():
+        return _local_backend(prefs_values)
     try:
         from ..daemon.lifecycle import connect_or_spawn
 
@@ -75,7 +87,42 @@ def main() -> None:
     ft.app(target=_page_main)
 
 
+def _report_startup_crash(page: ft.Page, tb: str) -> None:
+    """A packaged app has no console, so a startup crash is otherwise an
+    unexplained blank window. Write the traceback to a file the user can find
+    and show it on-screen instead of nothing."""
+    from ..state import DEFAULT_BASE_DIR
+
+    log_path = DEFAULT_BASE_DIR / "crash.log"
+    try:
+        DEFAULT_BASE_DIR.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(tb)
+    except Exception:
+        pass
+    try:
+        page.views.clear()
+        page.views.append(ft.View(
+            controls=[
+                ft.Text("The app hit a startup error. Please send this:",
+                        weight=ft.FontWeight.BOLD, color=ft.Colors.RED),
+                ft.Text(str(log_path), size=11, selectable=True),
+                ft.Text(tb, size=11, selectable=True, font_family="monospace"),
+            ],
+            scroll=ft.ScrollMode.AUTO, padding=16,
+        ))
+        page.update()
+    except Exception:
+        pass
+
+
 def _page_main(page: ft.Page) -> None:
+    try:
+        _run_app(page)
+    except Exception:  # noqa: BLE001
+        _report_startup_crash(page, traceback.format_exc())
+
+
+def _run_app(page: ft.Page) -> None:
     i18n = I18n()
     _prefs = prefs.load_prefs(i18n._prefs_path)
     backend = _make_backend(_prefs)
