@@ -54,11 +54,17 @@ jobs:
       - name: Build the daemon sidecar (eei-daemon)
         shell: bash
         run: |
-          # The GUI spawns this headless binary so migrations outlive it.
+          # The GUI spawns this headless binary so migrations outlive it, and
+          # it owns the persistent tray icon — so it must bundle pystray + PIL
+          # (all OSes) and the pyobjc frameworks pystray needs on macOS.
+          COLLECT="--collect-all pystray --collect-all PIL"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            COLLECT="$COLLECT --collect-all objc --collect-all AppKit --collect-all Foundation --collect-all CoreFoundation"
+          fi
           # PyInstaller one-file; absolute-import launcher keeps the package
           # context intact in the frozen build.
           uv run --with pyinstaller pyinstaller --onefile --name eei-daemon \
-            --paths . \
+            --paths . $COLLECT \
             --hidden-import keyring.backends.macOS \
             --hidden-import keyring.backends.Windows \
             --hidden-import keyring.backends.SecretService \
