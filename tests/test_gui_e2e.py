@@ -777,13 +777,6 @@ def _dialog_content(dlg):
 # active the app offers to keep going minimized (Dock/taskbar), with nothing
 # active it just quits.
 
-def _fire_close(page):
-    import types
-
-    assert page.window.on_event is not None, "no window event handler wired"
-    page.window.on_event(types.SimpleNamespace(type=ft.WindowEventType.CLOSE))
-
-
 def _fake_running_snapshot():
     from email_export_import.gui.run_manager import RunSnapshot
 
@@ -791,50 +784,44 @@ def _fake_running_snapshot():
                        total=5, current_folder="INBOX")
 
 
-def test_window_close_is_intercepted():
-    page = _run_page()
-    assert page.window.prevent_close is True
-    assert page.window.on_event is not None
+# The daemon owns the persistent tray + engine, so closing the GUI is just
+# closing a viewer. These tests force the in-process backend (via _isolate),
+# where quitting DOES stop migrations — so the menu Quit confirms when work is
+# active and quits straight away when idle.
 
-
-def test_close_when_idle_quits():
+def test_menu_quit_when_idle_quits():
     page = _run_page()
-    _fire_close(page)
+    assert _click(page.views[-1], EN("menu.quit"))
     assert _wait(lambda: page.window.destroy_calls == 1), \
-        "idle close did not destroy the window"
+        "idle quit did not destroy the window"
     assert page.dialog is None  # no pointless dialog when nothing is running
 
 
-def test_close_with_active_run_offers_background(monkeypatch):
+def test_menu_quit_with_active_run_confirms(monkeypatch):
     from email_export_import.gui.run_manager import RunManager
 
     page = _run_page()
     monkeypatch.setattr(RunManager, "snapshot_all",
                         lambda self: [_fake_running_snapshot()])
-    _fire_close(page)
-    assert page.dialog is not None, "close with active runs must ask, not die"
-    labels = [lbl for lbl, _ in _clickables(page.dialog)]
-    assert EN("close.background") in labels
-    assert EN("close.quit") in labels
+    assert _click(page.views[-1], EN("menu.quit"))
+    assert page.dialog is not None, "quit with active runs (in-process) must ask"
     assert page.window.destroy_calls == 0
 
-    assert _click(page.dialog, EN("close.background"))
-    assert page.dialog is None
-    assert page.window.minimized is True, "background choice must minimize"
-    assert page.window.destroy_calls == 0  # still alive
+    assert _click(page.dialog, EN("close.quit"))
+    assert _wait(lambda: page.window.destroy_calls == 1), \
+        "quit choice did not destroy the window"
 
 
-def test_close_with_active_run_can_still_quit(monkeypatch):
+def test_menu_quit_active_run_can_be_declined(monkeypatch):
     from email_export_import.gui.run_manager import RunManager
 
     page = _run_page()
     monkeypatch.setattr(RunManager, "snapshot_all",
                         lambda self: [_fake_running_snapshot()])
-    _fire_close(page)
-    assert _click(page.dialog, EN("close.quit"))
+    assert _click(page.views[-1], EN("menu.quit"))
+    assert _click(page.dialog, EN("close.background"))  # "keep running"
     assert page.dialog is None
-    assert _wait(lambda: page.window.destroy_calls == 1), \
-        "quit choice did not destroy the window"
+    assert page.window.destroy_calls == 0  # still alive
 
 
 def test_queued_bulk_work_counts_as_active(monkeypatch):
@@ -844,9 +831,9 @@ def test_queued_bulk_work_counts_as_active(monkeypatch):
     queued = RunSnapshot(key="k", title="t", status="queued", processed=0,
                          total=0, current_folder=None)
     monkeypatch.setattr(RunManager, "snapshot_all", lambda self: [queued])
-    _fire_close(page)
+    assert _click(page.views[-1], EN("menu.quit"))
     assert page.dialog is not None, \
-        "queued (bulk) work pending — close must ask, not quit"
+        "queued (bulk) work pending — quit must ask, not quit"
 
 
 # ---- menu bar ---------------------------------------------------------------

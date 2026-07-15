@@ -12,7 +12,6 @@ from .. import __version__
 from .. import secrets_store
 from . import prefs
 from . import sysinfo
-from . import tray
 from . import updater
 from . import views
 from .async_ops import run_async
@@ -55,11 +54,12 @@ def _local_backend(prefs_values: dict):
 
 
 def _daemon_enabled() -> bool:
-    # The out-of-process daemon is verified on macOS. On Windows/Linux it is
-    # not yet, and spawning it there has produced startup trouble — so those
-    # platforms run in-process for now (the proven path), no spawn attempt and
-    # no startup delay. Re-enable per platform once each is verified.
-    return sys.platform == "darwin"
+    # The daemon owns the persistent tray icon and keeps migrations running
+    # when the GUI is closed — the intended model on every desktop OS. Set
+    # EEI_NO_DAEMON=1 to force the in-process fallback (e.g. for debugging).
+    import os
+
+    return os.environ.get("EEI_NO_DAEMON") != "1"
 
 
 def _make_backend(prefs_values: dict):
@@ -852,14 +852,14 @@ def _run_app(page: ft.Page) -> None:
         backend.mark_failed(key, message)
         refresh_current()
 
-    # ---- close-to-background --------------------------------------------
-    # Closing the window while migrations are running (or queued) must not
-    # silently kill them. Intercept the close: offer to keep working
-    # minimized — the process stays alive in the Dock / task bar and clicking
-    # its icon restores the window. With nothing active, close just quits.
-    # (Hiding the window entirely is not an option: in Flet desktop the
-    # session dies as soon as window.visible goes False — minimize is the
-    # one background mode that keeps the engine running.)
+    # ---- closing the window ---------------------------------------------
+    # The persistent tray icon and the migration engine live in the daemon
+    # (a separate process), so closing the GUI is just closing a viewer: the
+    # daemon keeps migrating and its menu-bar / system-tray icon stays, ready
+    # to reopen this window. So the close button simply quits the GUI.
+    #
+    # The in-process fallback (EEI_NO_DAEMON / no daemon) has no separate
+    # process, so quitting there DOES stop active migrations — confirm first.
 
     def _work_pending() -> bool:
         return any(
@@ -867,78 +867,27 @@ def _run_app(page: ft.Page) -> None:
             for s in backend.snapshot_all()
         )
 
-    def _quit_app() -> None:
-        # A full quit (tray "Quit" / the close dialog's Quit) stops the
-        # out-of-process daemon too, so migrations don't silently continue with
-        # no window anywhere. Closing to background leaves the daemon running.
-        backend.shutdown_daemon()
-        page.run_task(page.window.destroy)
-
-    def _close_to_background(_e=None) -> None:
-        pop_dialog()
-        page.window.minimized = True
-        page.update()
-
-    def _close_and_quit(_e=None) -> None:
-        pop_dialog()
-        _quit_app()
-
     def request_quit() -> None:
-        # Shared by the window close button and the menu's Quit: with work
-        # active, ask (background vs quit); idle, just quit.
-        if not _work_pending():
-            _quit_app()
+        if isinstance(backend, DaemonBackend) or not _work_pending():
+            page.run_task(page.window.destroy)  # daemon (if any) keeps running
             return
+
+        def _quit(_e=None) -> None:
+            pop_dialog()
+            page.run_task(page.window.destroy)
+
         show_dialog(
             ft.AlertDialog(
                 modal=True,
                 title=ft.Text(i18n.t("close.confirm_title")),
                 content=ft.Text(i18n.t("close.confirm_body")),
                 actions=[
-                    ft.TextButton(i18n.t("close.quit"), on_click=_close_and_quit),
-                    ft.FilledButton(
-                        i18n.t("close.background"), on_click=_close_to_background
-                    ),
+                    ft.TextButton(i18n.t("close.background"),
+                                  on_click=lambda e: pop_dialog()),
+                    ft.FilledButton(i18n.t("close.quit"), on_click=_quit),
                 ],
             )
         )
-
-    def _on_window_event(e) -> None:
-        if getattr(e, "type", None) != ft.WindowEventType.CLOSE:
-            return
-        if tray_handle is not None:
-            # A menu-bar icon is present (packaged macOS app): the close
-            # button sends the app to the background for real — windows
-            # hidden AND the Dock icon dropped; only the status item stays.
-            # Quitting is an explicit menu action, guarded by request_quit.
-            if not tray.hide_app():
-                page.window.minimized = True  # fallback: at least minimize
-                page.update()
-        else:
-            request_quit()
-
-    page.window.prevent_close = True
-    page.window.on_event = _on_window_event
-
-    # ---- macOS status item (packaged app only; inert elsewhere) ----------
-
-    def _restore_window() -> None:
-        tray.show_app()  # Dock icon back + unhide (no-op when not hidden)
-        page.window.minimized = False
-        page.update()
-
-    def _tray_quit() -> None:
-        _restore_window()  # the busy/quit dialog must be visible
-        request_quit()
-
-    tray_handle = tray.start_status_item(
-        i18n.t("app.title"),
-        [
-            (lambda item: i18n.t("tray.status", count=backend.active_count()), None),
-            (i18n.t("tray.show"), ui(_restore_window)),
-            (i18n.t("menu.quit"), ui(_tray_quit)),
-        ],
-    )
 
     # ---- menu bar ---------------------------------------------------------
 

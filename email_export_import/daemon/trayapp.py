@@ -1,0 +1,93 @@
+"""The daemon's tray icon — the persistent handle that stays in the menu bar
+(macOS) / system tray (Windows) / app indicator (Linux) even when the GUI is
+closed. It runs on the daemon's MAIN thread (pystray owns an event loop); the
+HTTP server runs on a background thread.
+
+Cross-platform via pystray. On macOS the process is made an "accessory" so it
+shows a menu-bar item without a Dock icon.
+"""
+from __future__ import annotations
+
+import sys
+from typing import Callable
+
+
+def _envelope_image(size: int = 44):
+    """A white envelope glyph; on macOS it is marked as a template image so the
+    OS recolors it to match the menu bar."""
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    white = (255, 255, 255, 255)
+    m = size // 8
+    top, bottom = size // 4, size - size // 4
+    d.rounded_rectangle([m, top, size - m, bottom], radius=size // 12,
+                        outline=white, width=3)
+    mid = (top + bottom) // 2 + 1
+    d.line([m + 2, top + 2, size // 2, mid], fill=white, width=3)
+    d.line([size // 2, mid, size - m - 2, top + 2], fill=white, width=3)
+    return img
+
+
+def available() -> bool:
+    """True when a tray can plausibly be shown (a GUI session exists)."""
+    try:
+        import pystray  # noqa: F401
+        from PIL import Image  # noqa: F401
+    except Exception:
+        return False
+    if sys.platform not in ("darwin", "win32"):
+        # Linux needs a display + an app-indicator backend; be conservative.
+        import os
+        return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    return True
+
+
+def run(title: str, status_text: Callable[[], str],
+        on_open: Callable[[], None], on_quit: Callable[[], None],
+        on_ready: Callable[[object], None] | None = None) -> bool:
+    """Run the tray icon loop on the CURRENT (main) thread until Quit.
+
+    status_text() is called each time the menu opens (a live "N running" line).
+    on_open launches/reveals the GUI; on_quit stops the daemon. on_ready(icon)
+    is called once the icon exists so the caller can stop it from another thread
+    (e.g. an HTTP /shutdown). Returns False immediately if no tray backend is
+    usable (caller then falls back to a plain serve loop)."""
+    if not available():
+        return False
+    try:
+        import pystray
+
+        if sys.platform == "darwin":
+            # Menu-bar item, no Dock icon, don't steal focus.
+            try:
+                import AppKit
+
+                AppKit.NSApplication.sharedApplication().setActivationPolicy_(
+                    AppKit.NSApplicationActivationPolicyAccessory
+                )
+            except Exception:
+                pass
+
+        icon_holder: dict = {}
+
+        def _quit(icon, _item=None):
+            try:
+                on_quit()
+            finally:
+                icon.stop()
+
+        menu = pystray.Menu(
+            pystray.MenuItem(lambda item: status_text(), None, enabled=False),
+            pystray.MenuItem("Open", lambda icon, item: on_open()),
+            pystray.MenuItem("Quit", _quit),
+        )
+        icon = pystray.Icon("email-export-import", _envelope_image(), title, menu=menu)
+        icon_holder["icon"] = icon
+        if on_ready is not None:
+            on_ready(icon)
+        icon.run()  # blocks until icon.stop()
+        return True
+    except Exception:
+        return False

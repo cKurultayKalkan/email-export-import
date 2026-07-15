@@ -11,19 +11,17 @@ import json
 import os
 import secrets
 import signal
+import subprocess
 import threading
 import time
 from pathlib import Path
 
-from ..state import DEFAULT_BASE_DIR
 from ..gui.run_manager import RunManager
+from . import trayapp
+from .lifecycle import gui_command, rendezvous_path
 from .server import DaemonServer
 
-RENDEZVOUS = "daemon.json"
-
-
-def rendezvous_path(base_dir: Path | None = None) -> Path:
-    return (base_dir or DEFAULT_BASE_DIR) / RENDEZVOUS
+APP_TITLE = "Email Export Import Tool"
 
 
 def _write_rendezvous(path: Path, port: int, token: str) -> None:
@@ -54,10 +52,35 @@ def main(base_dir: Path | None = None) -> None:
             signal.signal(sig, lambda *a: stop.set())
     except ValueError:
         pass
-    server._on_stop = stop.set  # /shutdown also ends the serve loop
+
+    def _status() -> str:
+        n = manager.active_count()
+        return f"{APP_TITLE} — {n} migrating" if n else f"{APP_TITLE} — idle"
+
+    def _open_gui() -> None:
+        try:
+            subprocess.Popen(gui_command(), stdin=subprocess.DEVNULL,  # noqa: S603
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+    def _quit() -> None:
+        stop.set()
+
+    def _on_ready(icon) -> None:
+        # A /shutdown request (from the GUI's full-quit) must also end the tray
+        # loop; icon.stop() is thread-safe.
+        server._on_stop = icon.stop
+
     try:
-        while not stop.is_set():
-            time.sleep(0.5)
+        # The tray runs on THIS (main) thread and is the daemon's persistent
+        # handle; the HTTP server is already serving on its own thread. If no
+        # tray backend is available (headless), fall back to a plain wait.
+        server._on_stop = stop.set  # until the tray wires its own stop
+        ran = trayapp.run(APP_TITLE, _status, _open_gui, _quit, on_ready=_on_ready)
+        if not ran:
+            while not stop.is_set():
+                time.sleep(0.5)
     finally:
         server.stop()
         path.unlink(missing_ok=True)
