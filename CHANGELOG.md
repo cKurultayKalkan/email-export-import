@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.22 — 2026-07-15
+
+### Fixed
+- **Blank window on launch.** Startup connected to (or cold-started) the daemon
+  on the UI thread before drawing anything, so the window sat empty for a few
+  seconds and then the migrations popped in all at once. It now paints a
+  "Starting…" spinner immediately and does the connect off-thread, so there's
+  always something on screen.
+
 ## v0.1.21 — 2026-07-15
 
 ### Fixed

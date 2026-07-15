@@ -116,17 +116,48 @@ def _report_startup_crash(page: ft.Page, tb: str) -> None:
         pass
 
 
+def _splash_view(message: str) -> ft.View:
+    """Shown instantly at launch so the window is never blank while we connect
+    to (or cold-start + spawn) the daemon, which can take several seconds."""
+    return ft.View(
+        controls=[
+            ft.Column(
+                [ft.ProgressRing(width=44, height=44),
+                 ft.Text(message, size=13)],
+                alignment=ft.MainAxisAlignment.CENTER,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=16, expand=True,
+            )
+        ],
+        vertical_alignment=ft.MainAxisAlignment.CENTER,
+    )
+
+
 def _page_main(page: ft.Page) -> None:
     try:
-        _run_app(page)
+        i18n = I18n()
+        _prefs = prefs.load_prefs(i18n._prefs_path)
+        # Paint the spinner NOW, then do the (blocking) daemon connect OFF the
+        # event loop — asyncio.to_thread yields the loop so this splash frame
+        # actually reaches the client. Doing connect_or_spawn inline on the loop
+        # thread instead left the window blank for several seconds on cold start.
+        page.views.clear()
+        page.views.append(_splash_view(i18n.t("app.starting")))
+        page.update()
+
+        async def _boot() -> None:
+            try:
+                backend = await asyncio.to_thread(_make_backend, _prefs)
+                _run_app(page, backend, i18n, _prefs)
+            except Exception:  # noqa: BLE001
+                _report_startup_crash(page, traceback.format_exc())
+
+        page.run_task(_boot)
     except Exception:  # noqa: BLE001
         _report_startup_crash(page, traceback.format_exc())
 
 
-def _run_app(page: ft.Page) -> None:
-    i18n = I18n()
-    _prefs = prefs.load_prefs(i18n._prefs_path)
-    backend = _make_backend(_prefs)
+def _run_app(page: ft.Page, backend, i18n: I18n, _prefs: dict) -> None:
     # The daemon should run at login so migrations continue across reboots.
     # The user chose always-on; install once on first launch, then respect the
     # Settings toggle. Only meaningful for the daemon backend.

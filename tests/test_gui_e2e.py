@@ -204,6 +204,11 @@ def _run_page():
 
     page = FakePage()
     app_module._page_main(page)
+    # Startup now paints a splash, then connects/builds on a background boot
+    # task (run_task) before the real dashboard appears. Wait until _run_app has
+    # fully run — its last act is starting the poll on the event loop.
+    _wait(lambda: any(getattr(fn, "__name__", "") == "poll"
+                      for fn in page.run_task_calls))
     return page
 
 

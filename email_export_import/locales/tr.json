@@ -1,5 +1,6 @@
 {
   "app.title": "Email Export Import Tool",
+  "app.starting": "Başlatılıyor…",
   "status.running": "Çalışıyor",
   "status.queued": "Sırada",
   "status.paused": "Duraklatıldı",
