@@ -96,7 +96,7 @@ def _report_startup_crash(page: ft.Page, tb: str) -> None:
     log_path = DEFAULT_BASE_DIR / "crash.log"
     try:
         DEFAULT_BASE_DIR.mkdir(parents=True, exist_ok=True)
-        log_path.write_text(tb)
+        log_path.write_text(tb, encoding="utf-8")
     except Exception:
         pass
     try:

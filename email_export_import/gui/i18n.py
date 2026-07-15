@@ -27,7 +27,7 @@ class I18n:
     def __init__(self, locale: str | None = None, prefs_path: Path | None = None) -> None:
         self._prefs_path = prefs_path or DEFAULT_PREFS_PATH
         self._tables = {
-            name: json.loads((LOCALES_DIR / f"{name}.json").read_text())
+            name: json.loads((LOCALES_DIR / f"{name}.json").read_text(encoding="utf-8"))
             for name in available_locales()
         }
         if locale is not None and locale not in self._tables:
@@ -38,7 +38,7 @@ class I18n:
 
     def _saved_locale(self) -> str | None:
         try:
-            saved = json.loads(self._prefs_path.read_text()).get("locale")
+            saved = json.loads(self._prefs_path.read_text(encoding="utf-8")).get("locale")
         except Exception:
             return None
         return saved if saved in self._tables else None

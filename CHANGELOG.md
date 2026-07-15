@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.17 — 2026-07-15
+
+### Fixed
+- **The app now starts on Windows.** It read the Turkish locale (and state /
+  spool / prefs) files without an explicit encoding, so Windows used its
+  default codec (cp1252) and crashed on the Turkish characters — a blank
+  window. Every text file is now read and written as UTF-8, and a test guards
+  against this class of bug returning.
+
 ## v0.1.16 — 2026-07-15
 
 ### Fixed / Changed

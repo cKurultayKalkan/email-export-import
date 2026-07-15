@@ -171,7 +171,8 @@ def _linux_install(home: Path) -> bool:
         "Type=Application\n"
         "Name=Email Export Import Daemon\n"
         f"Exec={exec_line}\n"
-        "X-GNOME-Autostart-enabled=true\n"
+        "X-GNOME-Autostart-enabled=true\n",
+        encoding="utf-8",
     )
     return True
 

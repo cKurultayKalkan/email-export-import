@@ -23,7 +23,7 @@ def _read_rendezvous(base_dir: Path) -> dict | None:
     if not path.exists():
         return None
     try:
-        info = json.loads(path.read_text())
+        info = json.loads(path.read_text(encoding="utf-8"))
         if {"port", "token"} <= set(info):
             return info
     except (ValueError, OSError):

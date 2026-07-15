@@ -29,7 +29,7 @@ def rendezvous_path(base_dir: Path | None = None) -> Path:
 def _write_rendezvous(path: Path, port: int, token: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
         json.dump({"port": port, "token": token, "pid": os.getpid()}, fh)
     os.chmod(path, 0o600)
 

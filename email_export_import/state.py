@@ -32,7 +32,7 @@ class MigrationState:
         # failure lines) — persisted so the results survive an app restart.
         self.last_run: dict | None = None
         if path.exists():
-            raw = json.loads(path.read_text())
+            raw = json.loads(path.read_text(encoding="utf-8"))
             for name, f in raw.get("folders", {}).items():
                 self._folders[name] = {
                     "uidvalidity": f["uidvalidity"],
@@ -218,7 +218,7 @@ class MigrationState:
         tmp = self.path.with_suffix(".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(json.dumps(raw))
                 fh.flush()
                 os.fsync(fh.fileno())

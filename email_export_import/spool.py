@@ -68,7 +68,8 @@ class MessageSpool:
                     "flags": [f.decode("ascii", "replace") for f in flags],
                     "internaldate": internaldate.isoformat() if internaldate else None,
                 }
-            )
+            ),
+            encoding="utf-8",
         )
         os.chmod(meta, 0o600)
 
@@ -82,7 +83,7 @@ class MessageSpool:
         """
         d = self._folder_dir(folder)
         try:
-            meta = json.loads((d / f"{uid}.json").read_text())
+            meta = json.loads((d / f"{uid}.json").read_text(encoding="utf-8"))
             if meta.get("message_id") != message_id:
                 return None
             body = (d / f"{uid}.eml").read_bytes()
