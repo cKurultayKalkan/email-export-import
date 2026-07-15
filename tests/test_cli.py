@@ -430,3 +430,68 @@ def test_planning_survives_dropped_source_connection(monkeypatch, tmp_path):
     )
     assert result.exit_code == 0, result.output
     assert len(dst.folders["INBOX"]) == 1
+
+
+def test_remember_passwords_saves_to_keychain(monkeypatch, tmp_path):
+    from email_export_import import secrets_store
+
+    saved = {}
+    monkeypatch.setattr(secrets_store, "save_password",
+                        lambda h, e, r, pw: saved.__setitem__((h, e, r), pw) or True)
+    monkeypatch.setattr(secrets_store, "get_password", lambda h, e, r: None)
+
+    src = FakeIMAPClient(folders={"INBOX": [make_message(uid=1, message_id="<a@x>")]})
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    install_hosts(monkeypatch, {"src.test": src, "dst.test": dst})
+
+    result = runner.invoke(
+        app,
+        base_args(["--state-dir", str(tmp_path), "--remember-passwords"]),
+        env={"EEI_SRC_PASSWORD": "p1", "EEI_DST_PASSWORD": "p2"},
+    )
+    assert result.exit_code == 0, result.output
+    assert saved[("src.test", "a@x.com", "source")] == "p1"
+    assert saved[("dst.test", "b@y.com", "dest")] == "p2"
+
+
+def test_rate_limit_flag_accepted_and_shows_stats(monkeypatch, tmp_path):
+    src = FakeIMAPClient(folders={"INBOX": [make_message(uid=1, message_id="<a@x>")]})
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    install_hosts(monkeypatch, {"src.test": src, "dst.test": dst})
+
+    result = runner.invoke(
+        app,
+        base_args(["--state-dir", str(tmp_path), "--rate-limit", "2"]),
+        env={"EEI_SRC_PASSWORD": "p1", "EEI_DST_PASSWORD": "p2"},
+    )
+    assert result.exit_code == 0, result.output
+    assert "Duration:" in result.output
+    assert "Per folder" in result.output
+
+
+def test_resume_reads_password_from_keychain(monkeypatch, tmp_path):
+    # A saved session whose password lives in the keychain resumes without a
+    # prompt and without the env var.
+    from email_export_import import secrets_store
+    from email_export_import.state import MigrationState
+
+    store = {("src.test", "a@x.com", "source"): "p1",
+             ("dst.test", "b@y.com", "dest"): "p2"}
+    monkeypatch.setattr(secrets_store, "get_password",
+                        lambda h, e, r: store.get((h, e, r)))
+
+    src = FakeIMAPClient(folders={"INBOX": [make_message(uid=1, message_id="<a@x>")]})
+    dst = FakeIMAPClient(folders={"INBOX": []})
+    install_hosts(monkeypatch, {"src.test": src, "dst.test": dst})
+
+    # first run creates the session
+    runner.invoke(app, base_args(["--state-dir", str(tmp_path)]),
+                  env={"EEI_SRC_PASSWORD": "p1", "EEI_DST_PASSWORD": "p2"})
+    # non-interactive resume of the same pair, NO env vars — keychain supplies them
+    result = runner.invoke(
+        app,
+        ["--src-host", "src.test", "--src-email", "a@x.com",
+         "--dst-host", "dst.test", "--dst-email", "b@y.com", "--yes",
+         "--state-dir", str(tmp_path)],
+    )
+    assert result.exit_code == 0, result.output

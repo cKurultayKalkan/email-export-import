@@ -153,8 +153,16 @@ EEI_SRC_PASSWORD=... EEI_DST_PASSWORD=... uv run email-export-import \
 
 Useful flags: `--src-preset/--dst-preset`, `--src-host/--dst-host`,
 `--src-port/--dst-port`, `--src-email/--dst-email`, `--skip "Folder A,Folder B"`,
-`--workers N`, `--spool/--no-spool`, `--no-src-verify-ssl/--no-dst-verify-ssl`,
+`--workers N`, `--rate-limit MB/s`, `--spool/--no-spool`,
+`--remember-passwords`, `--no-src-verify-ssl/--no-dst-verify-ssl`,
 `--state-dir PATH`, `--yes`. Run `--help` for the full list.
+
+The CLI and the desktop app share the same engine, so both get the hard
+upload safety ceilings, the resume/dedup guarantees, the end-of-run
+completeness check, and honest completion. `--rate-limit` caps the upload
+speed further (the safety ceilings always apply on top); `--remember-passwords`
+stores them in the OS keychain so resumes don't prompt; the summary reports
+the duration and a per-folder breakdown.
 
 ## Desktop app
 

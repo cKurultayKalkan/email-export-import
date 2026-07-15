@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.19 — 2026-07-15
+
+### Added (CLI parity)
+- The CLI already shared the engine's safety and correctness features (upload
+  ceilings, completeness check, oversized-message patience, honest counts and
+  completion). It now also gets the desktop app's conveniences:
+  - `--rate-limit MB/s` to cap upload speed (the hard safety ceilings always
+    apply on top).
+  - `--remember-passwords` to store them in the OS keychain, and resume reads
+    a remembered password automatically instead of prompting.
+  - the Done summary now reports the run's duration and a per-folder breakdown.
+
 ## v0.1.18 — 2026-07-15
 
 ### Fixed

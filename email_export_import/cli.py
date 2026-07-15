@@ -17,6 +17,7 @@ from rich.progress import (
 from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.table import Table
 
+from . import secrets_store
 from .connection import MailConnection
 from .errors import CertificateVerifyFailed, MigrationError, QuotaExceeded
 from .folders import build_folder_plan
@@ -24,6 +25,7 @@ from .models import Account, ProviderPreset
 from .providers import PRESETS, get_preset, list_presets
 from .spool import MessageSpool
 from .state import MigrationState
+from .throttle import RateLimiter
 from .transfer import migrate
 
 SRC_PASSWORD_ENV = "EEI_SRC_PASSWORD"
@@ -102,7 +104,9 @@ def _gather_account(
             email_addr = Prompt.ask(f"{role} email address", default=default_email)
         else:
             email_addr = Prompt.ask(f"{role} email address")
-    password = os.environ.get(password_env)
+    password = os.environ.get(password_env) or secrets_store.get_password(
+        host, email_addr, _role_key(role)
+    )
     if not password:
         if not interactive:
             console.print(f"[red]{role}: set {password_env} when running with --yes[/red]")
@@ -191,10 +195,19 @@ def _offer_resume(state_dir: Optional[Path]) -> MigrationState | None:
     return None
 
 
+def _role_key(role: str) -> str:
+    return "source" if role == "Source" else "dest"
+
+
 def _account_from_config(cfg: dict, password_env: str, role: str) -> Account:
-    """Rebuild an Account from a saved session; only the password is asked."""
-    password = os.environ.get(password_env) or Prompt.ask(
-        f"{role} password", password=True
+    """Rebuild an Account from a saved session. The password comes from the
+    env var, then the OS keychain (if the user chose to remember it), else a
+    prompt — nothing is stored in the session file."""
+    password = (
+        os.environ.get(password_env)
+        or secrets_store.get_password(cfg.get("host", ""), cfg.get("email", ""),
+                                      _role_key(role))
+        or Prompt.ask(f"{role} password", password=True)
     )
     return Account(
         host=cfg["host"],
@@ -277,6 +290,20 @@ def run(
         help="Keep each downloaded message on disk until it is uploaded, so failed "
         "uploads retry from disk without re-downloading (default: off — messages "
         "stream through memory and never touch disk)",
+    ),
+    rate_limit: float = typer.Option(
+        0.0,
+        "--rate-limit",
+        min=0.0,
+        help="Cap upload speed in MB/s (0 = unlimited). Note: hard per-connection "
+        "and process-wide safety ceilings always apply on top of this.",
+    ),
+    remember_passwords: bool = typer.Option(
+        False,
+        "--remember-passwords",
+        help="Save the passwords in the OS keychain (macOS Keychain / Windows "
+        "Credential Manager / Linux Secret Service) so resume/next runs don't "
+        "prompt. Off by default; nothing is written to the session file.",
     ),
     yes: bool = typer.Option(False, "--yes", help="No prompts; fail instead of asking"),
     state_dir: Optional[Path] = typer.Option(None, "--state-dir", help="Override state directory (default ~/.email-export-import)"),
@@ -363,6 +390,11 @@ def run(
     if interactive and not Confirm.ask("Start migration?"):
         raise typer.Exit(code=0)
 
+    if remember_passwords:
+        for acc, role in ((src_account, "source"), (dst_account, "dest")):
+            if secrets_store.save_password(acc.host, acc.email, role, acc.password):
+                console.print(f"[dim]{role} password saved to the OS keychain.[/dim]")
+
     state = resume_state or MigrationState.for_pair(
         src_account.email, dst_account.email, base_dir=state_dir
     )
@@ -375,6 +407,7 @@ def run(
             "spool": use_spool,
         }
     )
+    state.mark_started()  # opens the duration clock (idempotent across resumes)
     state.flush()
 
     message_spool = (
@@ -411,6 +444,10 @@ def run(
                 ),
                 workers=workers,
                 spool=message_spool,
+                throttle=(
+                    RateLimiter(int(rate_limit * 1024 * 1024))
+                    if rate_limit > 0 else None
+                ),
             )
     except KeyboardInterrupt:
         console.print("[yellow]Interrupted — progress saved. Run again with the same accounts to resume.[/yellow]")
@@ -435,6 +472,22 @@ def run(
     summary.add_column("Failed", justify="right")
     summary.add_row(str(result.migrated), str(result.skipped), str(result.failed))
     console.print(summary)
+
+    secs = state.duration_seconds()
+    if secs is not None:
+        secs = int(secs)
+        pretty = (f"{secs // 3600}h {secs % 3600 // 60}m" if secs >= 3600
+                  else f"{secs // 60}m {secs % 60}s" if secs >= 60 else f"{secs}s")
+        console.print(f"[dim]Duration: {pretty}[/dim]")
+
+    done_counts = state.folder_done_counts()
+    if done_counts:
+        breakdown = Table(title="Per folder")
+        breakdown.add_column("Folder")
+        breakdown.add_column("Handled", justify="right")
+        for name, n in sorted(done_counts.items(), key=lambda kv: -kv[1]):
+            breakdown.add_row(name, str(n))
+        console.print(breakdown)
     if result.failures:
         console.print("[red]Failed messages:[/red]")
         for line in result.failures:
