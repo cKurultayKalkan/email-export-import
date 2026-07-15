@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.21 — 2026-07-15
+
+### Fixed
+- **Tray menu showed raw keys** (`tray.show`, `menu.quit`) instead of real
+  labels. The packaged daemon sidecar wasn't bundling the locale files, so its
+  translation table was empty. The build now collects them, and the daemon
+  falls back to English text if they're ever missing again.
+- **"Show window" did nothing on macOS** (a Dock icon appeared but no window).
+  The daemon lives inside the `.app`, so macOS already considered the app
+  "running" and `open` only re-activated the window-less daemon. It now uses
+  `open -n` to launch a fresh GUI instance.
+
 ## v0.1.20 — 2026-07-15
 
 ### Changed

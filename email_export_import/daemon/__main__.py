@@ -54,13 +54,22 @@ def main(base_dir: Path | None = None) -> None:
         pass
 
     # Localise the tray menu to the user's saved language.
+    open_label, quit_label = "Show window", "Quit"
+    status_tmpl = "{count} migrations running"
     try:
         from ..gui.i18n import I18n
         i18n = I18n()
-        open_label, quit_label = i18n.t("tray.show"), i18n.t("menu.quit")
-        status_tmpl = i18n.t("tray.status")
+        # A translation table that failed to ship (e.g. locale JSONs missing
+        # from a frozen build) makes t() echo the key back — never surface a
+        # raw "tray.show" in the menu; keep the English default instead.
+        if (v := i18n.t("tray.show")) != "tray.show":
+            open_label = v
+        if (v := i18n.t("menu.quit")) != "menu.quit":
+            quit_label = v
+        if (v := i18n.t("tray.status")) != "tray.status":
+            status_tmpl = v
     except Exception:
-        open_label, quit_label, status_tmpl = "Open", "Quit", "{count} migrations running"
+        pass
 
     def _status() -> str:
         n = manager.active_count()

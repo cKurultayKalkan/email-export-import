@@ -50,7 +50,12 @@ def gui_command() -> list[str]:
     if sys.platform == "darwin":
         for p in exe.parents:
             if p.suffix == ".app":
-                return ["open", str(p)]
+                # -n forces a NEW instance: the bundled `eei-daemon` sidecar
+                # runs from inside this .app, so LaunchServices already sees the
+                # bundle as "running" and a plain `open` would only re-activate
+                # the (window-less accessory) daemon instead of launching the
+                # GUI executable.
+                return ["open", "-n", str(p)]
     gui_name = ("email-export-import.exe" if sys.platform == "win32"
                 else "email-export-import")
     sibling = exe.with_name(gui_name)

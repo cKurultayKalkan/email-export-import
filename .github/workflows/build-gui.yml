@@ -65,6 +65,7 @@ jobs:
           # context intact in the frozen build.
           uv run --with pyinstaller pyinstaller --onefile --name eei-daemon \
             --paths . $COLLECT \
+            --collect-data email_export_import \
             --hidden-import keyring.backends.macOS \
             --hidden-import keyring.backends.Windows \
             --hidden-import keyring.backends.SecretService \
