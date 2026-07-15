@@ -9,6 +9,7 @@ from pathlib import Path
 import flet as ft
 
 from .. import __version__
+from .. import applog
 from .. import secrets_store
 from . import prefs
 from . import sysinfo
@@ -100,6 +101,7 @@ def _signal_existing_gui() -> bool:
         client = lifecycle._client_for(info)
         if client.is_alive() and client.gui_alive():
             client.request_show()
+            applog.log("gui", "existing GUI is alive; requested show, bowing out")
             return True
     except Exception:
         pass
@@ -107,6 +109,7 @@ def _signal_existing_gui() -> bool:
 
 
 def main() -> None:
+    applog.log("gui", f"launch exe={sys.executable}")
     if _signal_existing_gui():
         return
     ft.app(target=_page_main)
@@ -173,8 +176,10 @@ def _page_main(page: ft.Page) -> None:
         async def _boot() -> None:
             try:
                 backend = await asyncio.to_thread(_make_backend, _prefs)
+                applog.log("gui", f"booted backend={type(backend).__name__}")
                 _run_app(page, backend, i18n, _prefs)
             except Exception:  # noqa: BLE001
+                applog.log("gui", "startup crash:\n" + traceback.format_exc())
                 _report_startup_crash(page, traceback.format_exc())
 
         page.run_task(_boot)
@@ -224,22 +229,14 @@ def _run_app(page: ft.Page, backend, i18n: I18n, _prefs: dict) -> None:
         except RuntimeError:
             pass  # page closed / control unmounted
 
-    # ---- window hide / reveal (daemon mode) -----------------------------
-    # With a daemon running, closing the window must NOT quit: hiding it keeps
-    # this process alive as the one GUI instance, so the tray's "Show window"
-    # (and any second launch) reveal THIS window instead of spawning a new,
-    # blank one. The reveal/hide come off the poll (already on the event loop).
-    def _hide_window() -> None:
-        try:
-            page.window.skip_task_bar = True
-            page.window.visible = False
-            page.update()
-        except Exception:
-            pass
-
+    # ---- window reveal / close ------------------------------------------
+    # The daemon runs OUTSIDE the .app now, so closing the GUI simply lets this
+    # process exit (the daemon keeps migrating). The tray's "Show window"
+    # launches a fresh GUI when none is open, or — when one IS open — sets the
+    # show flag the poll below turns into this focus call. No hiding, no second
+    # blank window.
     def _reveal_window() -> None:
         try:
-            page.window.skip_task_bar = False
             page.window.visible = True
             page.window.focused = True
             page.update()
@@ -247,14 +244,11 @@ def _run_app(page: ft.Page, backend, i18n: I18n, _prefs: dict) -> None:
         except Exception:
             pass
 
-    if isinstance(backend, DaemonBackend):
-        page.window.prevent_close = True
+    def _on_window_event(e) -> None:
+        if getattr(e, "type", None) == ft.WindowEventType.CLOSE:
+            applog.log("gui", "window close event")
 
-        def _on_window_event(e) -> None:
-            if getattr(e, "type", None) == ft.WindowEventType.CLOSE:
-                _hide_window()
-
-        page.window.on_event = _on_window_event
+    page.window.on_event = _on_window_event
 
     # All dialogs go through these wrappers so the poll knows when a modal
     # is open: its 5x/second page.update() must pause then, or it races the
@@ -678,9 +672,11 @@ def _run_app(page: ft.Page, backend, i18n: I18n, _prefs: dict) -> None:
                 # reveals THIS window and "Quit" from the tray closes it.
                 ev = backend.poll_events()
                 if ev.get("quit"):
+                    applog.log("gui", "tray quit received; destroying window")
                     page.run_task(page.window.destroy)
                     return
                 if ev.get("show"):
+                    applog.log("gui", "tray show received; focusing window")
                     _reveal_window()
                 pump_bulk()  # start queued bulk accounts as slots free (on-loop)
                 if dialog_open[0]:

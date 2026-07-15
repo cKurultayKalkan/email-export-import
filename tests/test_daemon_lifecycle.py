@@ -76,3 +76,30 @@ def test_connect_respawns_when_rendezvous_is_stale(tmp_path, monkeypatch):
 def test_connect_returns_none_if_spawn_never_appears(tmp_path, monkeypatch):
     monkeypatch.setattr(lifecycle, "_spawn", lambda base: None)  # spawn does nothing
     assert lifecycle.connect_or_spawn(base_dir=tmp_path, timeout=0.5) is None
+
+
+def test_ensure_external_copy_is_idempotent_and_updates_on_new_build(tmp_path):
+    # The daemon is copied out of the .app; a same-size copy is left alone, a
+    # different-size (new build) is refreshed.
+    src = tmp_path / "eei-daemon"
+    src.write_bytes(b"BINARYv1")  # 8 bytes
+    dst = tmp_path / "bin" / "eei-daemon"
+
+    lifecycle._ensure_external_copy(src, dst)
+    assert dst.read_bytes() == b"BINARYv1"
+
+    dst.write_bytes(b"TAMPERED")  # same 8-byte size -> must be left as-is
+    lifecycle._ensure_external_copy(src, dst)
+    assert dst.read_bytes() == b"TAMPERED"
+
+    src.write_bytes(b"BINARYv1-LONGER")  # different size -> refresh
+    lifecycle._ensure_external_copy(src, dst)
+    assert dst.read_bytes() == b"BINARYv1-LONGER"
+
+
+def test_gui_command_opens_the_app_on_macos(monkeypatch):
+    # On macOS the tray launches the GUI with `open <app>` (app path from env).
+    monkeypatch.setattr(lifecycle.sys, "platform", "darwin")
+    monkeypatch.setenv("EEI_GUI_APP", "/Applications/Email Export Import Tool.app")
+    assert lifecycle.gui_command() == [
+        "open", "/Applications/Email Export Import Tool.app"]

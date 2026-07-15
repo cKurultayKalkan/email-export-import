@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.25 — 2026-07-16
+
+### Fixed
+- **The real cause of the blank "Show window" (and the tray not coming back
+  after Quit).** The background daemon was running from *inside* the macOS
+  `.app`, so macOS considered the app "already running" — every attempt to open
+  the window either re-activated the window-less daemon or forced a blank second
+  instance. The daemon now runs from a copy outside the bundle, so opening the
+  app launches (or focuses) a real GUI window, and quitting from the tray then
+  relaunching brings everything back cleanly.
+- Added a diagnostic log (`~/.email-export-import/gui.log` and `daemon.log`,
+  private, no passwords) so window/daemon lifecycle issues can be pinpointed.
+
 ## v0.1.24 — 2026-07-15
 
 ### Fixed

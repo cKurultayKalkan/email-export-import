@@ -12,10 +12,12 @@ import os
 import secrets
 import signal
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
 
+from .. import applog
 from ..gui.run_manager import RunManager
 from . import trayapp
 from .lifecycle import gui_command, rendezvous_path
@@ -43,6 +45,8 @@ def main(base_dir: Path | None = None) -> None:
 
     path = rendezvous_path(base_dir)
     _write_rendezvous(path, server.port, token)
+    applog.log("daemon", f"started exe={sys.executable} port={server.port} "
+               f"gui_app={os.environ.get('EEI_GUI_APP')}", base_dir)
 
     stop = threading.Event()
     # signal handlers can only be installed from the main thread; tests drive
@@ -81,21 +85,24 @@ def main(base_dir: Path | None = None) -> None:
         return APP_TITLE
 
     def _open_gui() -> None:
-        # A GUI already alive (possibly just hidden behind its close button):
-        # reveal it rather than spawning a second, blank instance. Only
-        # cold-launch when none is running.
+        # A GUI already open: focus it via the show flag. Otherwise launch one —
+        # the daemon runs outside the .app, so `open <app>` renders a real GUI.
         if server.gui_alive():
+            applog.log("daemon", "tray Show: GUI alive, requesting focus", base_dir)
             server.request_show()
             return
+        cmd = gui_command()
+        applog.log("daemon", f"tray Show: launching GUI cmd={cmd}", base_dir)
         try:
-            subprocess.Popen(gui_command(), stdin=subprocess.DEVNULL,  # noqa: S603
+            subprocess.Popen(cmd, stdin=subprocess.DEVNULL,  # noqa: S603
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            applog.log("daemon", f"tray Show: launch failed: {exc}", base_dir)
 
     def _quit() -> None:
         # Ask a running GUI to close too, and give its poll a moment to see the
         # flag before the daemon (and this server) go away.
+        applog.log("daemon", "tray Quit", base_dir)
         server.request_quit_gui()
         if server.gui_alive():
             time.sleep(0.5)
@@ -117,6 +124,7 @@ def main(base_dir: Path | None = None) -> None:
             while not stop.is_set():
                 time.sleep(0.5)
     finally:
+        applog.log("daemon", "stopping", base_dir)
         server.stop()
         path.unlink(missing_ok=True)
 
