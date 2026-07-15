@@ -130,6 +130,7 @@ def _splash_view(message: str) -> ft.View:
             )
         ],
         vertical_alignment=ft.MainAxisAlignment.CENTER,
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
     )
 
 
@@ -438,19 +439,12 @@ def _run_app(page: ft.Page, backend, i18n: I18n, _prefs: dict) -> None:
         dst_saved = secrets_store.get_password(
             dst_cfg.get("host", ""), dst_cfg.get("email", ""), "dest") or ""
 
-        def submit(src_pw: str, dst_pw: str, remember: bool) -> None:
+        # If a password was already remembered for this pair, default the plan
+        # step's "remember" to on so unticking there is what forgets it.
+        had_saved = bool(src_saved or dst_saved)
+
+        def submit(src_pw: str, dst_pw: str) -> None:
             pop_dialog()
-            if remember:
-                secrets_store.save_password(
-                    src_cfg.get("host", ""), src_cfg.get("email", ""), "source", src_pw)
-                secrets_store.save_password(
-                    dst_cfg.get("host", ""), dst_cfg.get("email", ""), "dest", dst_pw)
-            else:
-                # Unticking forgets any previously stored password for this pair.
-                secrets_store.delete_password(
-                    src_cfg.get("host", ""), src_cfg.get("email", ""), "source")
-                secrets_store.delete_password(
-                    dst_cfg.get("host", ""), dst_cfg.get("email", ""), "dest")
             src_dict = _account_dict(src_cfg, src_pw, "EEI_SRC_PASSWORD")
             dst_dict = _account_dict(dst_cfg, dst_pw, "EEI_DST_PASSWORD")
             # Reconnecting + reading folders can take a while on a slow or
@@ -459,7 +453,8 @@ def _run_app(page: ft.Page, backend, i18n: I18n, _prefs: dict) -> None:
             run_async(
                 lambda: backend.plan(src_dict, dst_dict, sorted(cfg.get("skip", []))),
                 on_done=ui(lambda plan: _start_resumed(key, title, cfg,
-                                                       src_dict, dst_dict, plan)),
+                                                       src_dict, dst_dict, plan,
+                                                       had_saved)),
                 on_error=ui(lambda exc: _show_error(str(exc))),
             )
 
@@ -467,19 +462,19 @@ def _run_app(page: ft.Page, backend, i18n: I18n, _prefs: dict) -> None:
             views.build_password_dialog(
                 i18n, title, submit, lambda: pop_dialog(),
                 src_prefill=src_saved, dst_prefill=dst_saved,
-                can_remember=secrets_store.available(),
-                remember_default=bool(src_saved or dst_saved),
             )
         )
 
     def _start_resumed(key: str, title: str, cfg: dict,
-                       src_dict: dict, dst_dict: dict, plan: dict) -> None:
+                       src_dict: dict, dst_dict: dict, plan: dict,
+                       remember_default: bool = False) -> None:
         # Resume routes through the plan screen so the user can choose which
         # folders to transfer (and adjust workers/spool) right before starting.
         nonlocal ws
         show_loading(False)
         ws = WizardState()
         ws.src, ws.dst = src_dict, dst_dict
+        ws.remember = remember_default
         ws.plan_id = plan["plan_id"]
         ws.plan_folders = plan["folders"]
         ws.plan_total = plan["total"]
@@ -798,12 +793,20 @@ def _run_app(page: ft.Page, backend, i18n: I18n, _prefs: dict) -> None:
         show_dialog(_plan_dialog())
 
     def _remember_wizard_passwords() -> None:
-        if not (ws.remember and ws.src and ws.dst):
+        # The plan step's "remember" is authoritative: ticked saves the pair to
+        # the OS keychain, unticked forgets any previously stored password.
+        if not (ws.src and ws.dst):
             return
-        secrets_store.save_password(ws.src.get("host", ""), ws.src.get("email", ""),
-                                    "source", ws.src.get("password", ""))
-        secrets_store.save_password(ws.dst.get("host", ""), ws.dst.get("email", ""),
-                                    "dest", ws.dst.get("password", ""))
+        if ws.remember:
+            secrets_store.save_password(ws.src.get("host", ""), ws.src.get("email", ""),
+                                        "source", ws.src.get("password", ""))
+            secrets_store.save_password(ws.dst.get("host", ""), ws.dst.get("email", ""),
+                                        "dest", ws.dst.get("password", ""))
+        else:
+            secrets_store.delete_password(ws.src.get("host", ""),
+                                          ws.src.get("email", ""), "source")
+            secrets_store.delete_password(ws.dst.get("host", ""),
+                                          ws.dst.get("email", ""), "dest")
 
     def start_migration() -> None:
         pop_dialog()  # close the plan dialog now (commits its dismiss)

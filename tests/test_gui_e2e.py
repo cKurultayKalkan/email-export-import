@@ -992,26 +992,33 @@ def test_resume_remembers_and_prefills_passwords(monkeypatch, tmp_path):
         ),
     )
 
+    # --- prefill: a stored pair pre-fills the resume password dialog ---
+    store[("src.test", "a@x.com", "source")] = "srcpw"
+    store[("dst.test", "b@y.com", "dest")] = "dstpw"
     page = _run_page()
     assert _click(page.views[-1], EN("dash.resume"))
-    # the remember checkbox is offered (a store is available)
-    labels = _texts_of_dialog(page.dialog)
-    assert EN("resume.remember") in labels
+    # The remember checkbox is NOT on the password dialog anymore — it lives on
+    # the plan step, the one screen both new and resumed migrations share.
+    assert EN("resume.remember") not in _texts_of_dialog(page.dialog)
     fields = _text_fields(page.dialog)
-    fields[0].value = "srcpw"
-    fields[1].value = "dstpw"
-    _tick(page.dialog, EN("resume.remember"))
-    assert _click(page.dialog, EN("resume.go"))
-    assert _wait(lambda: ("src.test", "a@x.com", "source") in store)
-    assert store[("dst.test", "b@y.com", "dest")] == "dstpw"
+    assert fields[0].value == "srcpw"
+    assert fields[1].value == "dstpw"
+    assert _click(page.dialog, EN("resume.cancel"))  # nothing runs; still paused
 
-    # a fresh resume dialog now pre-fills from the store
-    _wait(lambda: page.views and page.views[-1].route == "/" or page.dialog is None)
+    # --- save: ticking remember on the plan step stores the pair ---
+    store.clear()
     page2 = _run_page()
     assert _click(page2.views[-1], EN("dash.resume"))
     fields2 = _text_fields(page2.dialog)
-    assert fields2[0].value == "srcpw"
-    assert fields2[1].value == "dstpw"
+    fields2[0].value = "srcpw"
+    fields2[1].value = "dstpw"
+    assert _click(page2.dialog, EN("resume.go"))
+    assert _wait(lambda: _dialog_has(page2, EN("plan.start")))
+    assert EN("resume.remember") in _texts_of_dialog(page2.dialog)
+    _tick(page2.dialog, EN("resume.remember"))
+    assert _click(page2.dialog, EN("plan.start"))
+    assert _wait(lambda: ("src.test", "a@x.com", "source") in store)
+    assert store[("dst.test", "b@y.com", "dest")] == "dstpw"
 
 
 def _texts_of_dialog(dlg):
@@ -1035,6 +1042,9 @@ def _tick(dlg, label):
     def walk(c):
         if isinstance(c, ft.Checkbox) and c.label == label:
             c.value = True
+            on_change = getattr(c, "on_change", None)
+            if on_change is not None:  # fire it like a real click would
+                on_change(type("E", (), {"control": c})())
             return True
         for ch in getattr(c, "controls", []) or []:
             if walk(ch):

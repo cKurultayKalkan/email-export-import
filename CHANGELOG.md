@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.23 — 2026-07-15
+
+### Fixed
+- **"Starting…" splash was left-aligned** instead of centred on the launch
+  screen.
+- **"Remember passwords" was asked twice** when resuming — once on the password
+  prompt and again on the migration plan. It now appears only on the plan step,
+  the single screen both new and resumed migrations pass through, and ticking
+  it there is what saves (unticking forgets) the pair.
+
 ## v0.1.22 — 2026-07-15
 
 ### Fixed

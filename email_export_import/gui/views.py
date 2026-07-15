@@ -884,8 +884,6 @@ def build_password_dialog(
     on_cancel: Callable[[], None],
     src_prefill: str = "",
     dst_prefill: str = "",
-    can_remember: bool = False,
-    remember_default: bool = False,
 ) -> ft.AlertDialog:
     src_pw = ft.TextField(
         label=i18n.t("resume.src_password"), password=True, can_reveal_password=True,
@@ -895,18 +893,13 @@ def build_password_dialog(
         label=i18n.t("resume.dst_password"), password=True, can_reveal_password=True,
         value=dst_prefill,
     )
+    # "Remember passwords" lives only on the plan/confirm step (build_plan), the
+    # one screen both new and resumed migrations pass through — so it isn't
+    # asked twice.
     content = [ft.Text(title, size=12), src_pw, dst_pw]
-    remember = None
-    if can_remember:
-        # Only offered when a secure OS keychain is actually present. Default
-        # off (the user opts in per the security model).
-        remember = ft.Checkbox(label=i18n.t("resume.remember"),
-                               value=remember_default)
-        content.append(remember)
 
     def submit() -> None:
-        on_submit(src_pw.value or "", dst_pw.value or "",
-                  bool(remember.value) if remember is not None else False)
+        on_submit(src_pw.value or "", dst_pw.value or "")
 
     return ft.AlertDialog(
         modal=True,
