@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.24 — 2026-07-15
+
+### Fixed
+- **"Show window" opened blank windows and stacked up new ones.** Closing the
+  window used to quit the viewer, and each "Show window" launched a fresh
+  process — which, with the app still resident, rendered a blank window and
+  multiplied on every click. Now the app is single-instance: closing the window
+  **hides** it (the daemon keeps migrating), "Show window" **reveals the same
+  window**, and launching the app again focuses the running one instead of
+  opening a second. Quitting from the tray also closes the window.
+
 ## v0.1.23 — 2026-07-15
 
 ### Fixed

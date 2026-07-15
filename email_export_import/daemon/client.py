@@ -21,7 +21,8 @@ class DaemonClient:
         self._token = token
         self._timeout = timeout
 
-    def _request(self, method: str, path: str, body: dict | None = None) -> dict:
+    def _request(self, method: str, path: str, body: dict | None = None,
+                 timeout: float | None = None) -> dict:
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(
             self._base + path, data=data, method=method,
@@ -29,7 +30,8 @@ class DaemonClient:
                      "Content-Type": "application/json"},
         )
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as r:  # noqa: S310
+            with urllib.request.urlopen(  # noqa: S310
+                    req, timeout=self._timeout if timeout is None else timeout) as r:
                 return json.loads(r.read().decode() or "{}")
         except urllib.error.HTTPError as exc:
             raise DaemonError(f"{exc.code} {exc.reason}") from exc
@@ -55,6 +57,21 @@ class DaemonClient:
 
     def get_settings(self) -> dict:
         return self._request("GET", "/settings")
+
+    def events(self) -> dict:
+        """Heartbeat + one-shot tray requests: {show, quit}. Polled ~5x/sec on
+        the GUI event loop, so use a short timeout: a wedged daemon must not
+        freeze the UI for the full default timeout every tick."""
+        return self._request("GET", "/events", timeout=1.5)
+
+    def gui_alive(self) -> bool:
+        try:
+            return bool(self._request("GET", "/gui-alive").get("alive"))
+        except DaemonError:
+            return False
+
+    def request_show(self) -> None:
+        self._request("POST", "/request-show")
 
     # ---- controls ----
     def pause(self, key: str) -> None:

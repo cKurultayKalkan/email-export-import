@@ -12,6 +12,7 @@ import dataclasses
 import json
 import secrets
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ..models import Account
@@ -94,6 +95,17 @@ class _Handler(BaseHTTPRequestHandler):
             return self._send(200, {"max_active": m.max_active,
                                     "workers": m.workers,
                                     "rate_limit": m.rate_limit})
+        if self.path == "/events":
+            # The GUI polls this every tick: it doubles as a heartbeat (so the
+            # daemon knows a GUI is alive) and delivers tray requests. `show` is
+            # one-shot (cleared on read); `quit` latches until the daemon stops,
+            # so the GUI can't miss it on a dropped tick.
+            self._server.note_gui_seen()
+            return self._send(200, self._server.take_events())
+        if self.path == "/gui-alive":
+            # Used by a second GUI launch to decide whether to bow out; does NOT
+            # count as a heartbeat itself.
+            return self._send(200, {"alive": self._server.gui_alive()})
         return self._send(404, {"error": "not found"})
 
     def do_POST(self) -> None:
@@ -125,6 +137,10 @@ class _Handler(BaseHTTPRequestHandler):
             return self._do_plan(body)
         if self.path == "/start":
             return self._do_start(body)
+
+        if self.path == "/request-show":
+            self._server.request_show()
+            return self._send(200, {"ok": True})
 
         if self.path == "/shutdown":
             self._send(200, {"ok": True})
@@ -236,10 +252,37 @@ class DaemonServer:
         self._httpd.daemon = self  # type: ignore[attr-defined]
         self._thread: threading.Thread | None = None
         self._on_stop = None  # optional callback (daemon main loop wakeup)
+        # GUI coordination: last time a GUI heartbeated (/events), and one-shot
+        # "reveal the window" / "quit the GUI" requests set by the tray.
+        self._gui_seen = 0.0
+        self._show_requested = False
+        self._quit_requested = False
 
     @property
     def port(self) -> int:
         return self._httpd.server_address[1]
+
+    # ---- GUI coordination ----
+    def note_gui_seen(self) -> None:
+        self._gui_seen = time.monotonic()
+
+    def gui_alive(self, within: float = 4.0) -> bool:
+        """True if a GUI heartbeated recently — so a launch/tray-open can reveal
+        the existing window instead of spawning another."""
+        return (time.monotonic() - self._gui_seen) < within
+
+    def request_show(self) -> None:
+        self._show_requested = True
+
+    def request_quit_gui(self) -> None:
+        self._quit_requested = True
+
+    def take_events(self) -> dict:
+        # `show` is one-shot; `quit` latches (a full-quit must not be missed on
+        # a dropped poll, and it only fires when the daemon is stopping anyway).
+        show, quit_ = self._show_requested, self._quit_requested
+        self._show_requested = False
+        return {"show": show, "quit": quit_}
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._httpd.serve_forever,

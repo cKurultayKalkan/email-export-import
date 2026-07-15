@@ -35,6 +35,13 @@ def _wire_imap(monkeypatch, src, dst):
     )
 
 
+def test_poll_events_is_always_empty(backend):
+    # No out-of-process tray in local mode — the parity method exists and is
+    # inert, matching DaemonBackend's shape so app.py's poll treats both alike.
+    b, _, _ = backend
+    assert b.poll_events() == {"show": False, "quit": False}
+
+
 def test_connection_ok_and_auth_failure(backend, monkeypatch):
     from email_export_import import connection
     from tests.fakes import FakeIMAPClient

@@ -73,6 +73,15 @@ class DaemonBackend:
     def snapshot_all(self) -> list[RunSnapshot]:
         return [_snapshot_from_wire(d) for d in self._last]
 
+    def poll_events(self) -> dict:
+        """Heartbeat the daemon and return one-shot {show, quit} tray requests.
+        Called every poll tick; failures are treated as "nothing to do"."""
+        try:
+            ev = self._client.events()
+            return {"show": bool(ev.get("show")), "quit": bool(ev.get("quit"))}
+        except DaemonError:
+            return {"show": False, "quit": False}
+
     def _cached(self, key: str) -> dict | None:
         for d in self._last:
             if d["key"] == key:

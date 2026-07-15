@@ -81,6 +81,12 @@ def main(base_dir: Path | None = None) -> None:
         return APP_TITLE
 
     def _open_gui() -> None:
+        # A GUI already alive (possibly just hidden behind its close button):
+        # reveal it rather than spawning a second, blank instance. Only
+        # cold-launch when none is running.
+        if server.gui_alive():
+            server.request_show()
+            return
         try:
             subprocess.Popen(gui_command(), stdin=subprocess.DEVNULL,  # noqa: S603
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -88,6 +94,11 @@ def main(base_dir: Path | None = None) -> None:
             pass
 
     def _quit() -> None:
+        # Ask a running GUI to close too, and give its poll a moment to see the
+        # flag before the daemon (and this server) go away.
+        server.request_quit_gui()
+        if server.gui_alive():
+            time.sleep(0.5)
         stop.set()
 
     def _on_ready(icon) -> None:

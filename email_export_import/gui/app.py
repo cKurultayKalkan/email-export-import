@@ -84,7 +84,31 @@ def _make_backend(prefs_values: dict):
     return _local_backend(prefs_values)
 
 
+def _signal_existing_gui() -> bool:
+    """Single-instance guard: if a GUI is already running (heartbeating the
+    daemon), ask the daemon to reveal that window and return True so this launch
+    bows out instead of opening a second, blank window."""
+    if not _daemon_enabled():
+        return False
+    try:
+        from ..daemon import lifecycle
+        from ..state import DEFAULT_BASE_DIR
+
+        info = lifecycle._read_rendezvous(DEFAULT_BASE_DIR)
+        if not info:
+            return False
+        client = lifecycle._client_for(info)
+        if client.is_alive() and client.gui_alive():
+            client.request_show()
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def main() -> None:
+    if _signal_existing_gui():
+        return
     ft.app(target=_page_main)
 
 
@@ -199,6 +223,38 @@ def _run_app(page: ft.Page, backend, i18n: I18n, _prefs: dict) -> None:
             control.update()
         except RuntimeError:
             pass  # page closed / control unmounted
+
+    # ---- window hide / reveal (daemon mode) -----------------------------
+    # With a daemon running, closing the window must NOT quit: hiding it keeps
+    # this process alive as the one GUI instance, so the tray's "Show window"
+    # (and any second launch) reveal THIS window instead of spawning a new,
+    # blank one. The reveal/hide come off the poll (already on the event loop).
+    def _hide_window() -> None:
+        try:
+            page.window.skip_task_bar = True
+            page.window.visible = False
+            page.update()
+        except Exception:
+            pass
+
+    def _reveal_window() -> None:
+        try:
+            page.window.skip_task_bar = False
+            page.window.visible = True
+            page.window.focused = True
+            page.update()
+            page.run_task(page.window.to_front)
+        except Exception:
+            pass
+
+    if isinstance(backend, DaemonBackend):
+        page.window.prevent_close = True
+
+        def _on_window_event(e) -> None:
+            if getattr(e, "type", None) == ft.WindowEventType.CLOSE:
+                _hide_window()
+
+        page.window.on_event = _on_window_event
 
     # All dialogs go through these wrappers so the poll knows when a modal
     # is open: its 5x/second page.update() must pause then, or it races the
@@ -617,6 +673,15 @@ def _run_app(page: ft.Page, backend, i18n: I18n, _prefs: dict) -> None:
         while True:
             await asyncio.sleep(0.2)
             try:
+                # Heartbeat the daemon and pick up tray requests. This runs every
+                # tick (even behind a dialog / while hidden) so "Show window"
+                # reveals THIS window and "Quit" from the tray closes it.
+                ev = backend.poll_events()
+                if ev.get("quit"):
+                    page.run_task(page.window.destroy)
+                    return
+                if ev.get("show"):
+                    _reveal_window()
                 pump_bulk()  # start queued bulk accounts as slots free (on-loop)
                 if dialog_open[0]:
                     # A modal dialog is up: pushing page.update() 5x/second

@@ -54,6 +54,10 @@ class LocalBackend:
     def snapshot_all(self) -> list[RunSnapshot]:
         return self._manager.snapshot_all()
 
+    def poll_events(self) -> dict:
+        """No out-of-process tray in local mode — never a show/quit request."""
+        return {"show": False, "quit": False}
+
     def config_for(self, key: str) -> dict | None:
         run = self._manager.get(key)
         return run.state.config if run else None

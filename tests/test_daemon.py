@@ -97,6 +97,38 @@ def test_settings_round_trip(daemon):
     assert c.get_settings()["workers"] == 8
 
 
+def test_events_heartbeat_and_show_request(daemon):
+    server, _ = daemon
+    c = _client(server)
+
+    # No GUI has polled yet.
+    assert c.gui_alive() is False
+    # Polling /events counts as a heartbeat.
+    assert c.events() == {"show": False, "quit": False}
+    assert c.gui_alive() is True
+
+    # A tray "Show window" request is delivered once, then cleared.
+    c.request_show()
+    assert c.events()["show"] is True
+    assert c.events()["show"] is False
+
+
+def test_events_delivers_quit_request(daemon):
+    server, _ = daemon
+    c = _client(server)
+    c.events()  # heartbeat so the server considers a GUI present
+    server.request_quit_gui()
+    assert c.events()["quit"] is True
+
+
+def test_gui_alive_check_is_not_a_heartbeat(daemon):
+    server, _ = daemon
+    c = _client(server)
+    # /gui-alive must not itself mark a GUI as present.
+    assert c.gui_alive() is False
+    assert c.gui_alive() is False
+
+
 def test_rendezvous_file_is_written_and_private(tmp_path, monkeypatch):
     # The GUI finds the daemon by reading {port, token, pid} from a 0600 file
     # in the state dir. Drive main() briefly on a thread, then read it back.

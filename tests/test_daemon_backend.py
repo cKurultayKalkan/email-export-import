@@ -55,6 +55,23 @@ def test_settings_write_through(backend):
     assert b.workers == 8
 
 
+def test_poll_events_reflects_show_and_quit(backend):
+    b, _, _ = backend
+    # Nothing pending.
+    assert b.poll_events() == {"show": False, "quit": False}
+    # A tray show request (set on the daemon) surfaces once (one-shot).
+    b._client.request_show()
+    assert b.poll_events() == {"show": True, "quit": False}
+    assert b.poll_events() == {"show": False, "quit": False}
+
+
+def test_poll_events_degrades_when_daemon_unreachable(backend):
+    b, _, _ = backend
+    # Point the client at a dead port: poll_events must not raise.
+    b._client._base = "http://127.0.0.1:1"
+    assert b.poll_events() == {"show": False, "quit": False}
+
+
 def test_cancel_and_dismiss(backend, tmp_path):
     b, manager, _ = backend
     s = MigrationState.for_pair("a@x", "b@y", base_dir=tmp_path)
