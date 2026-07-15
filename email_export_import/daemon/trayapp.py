@@ -46,7 +46,8 @@ def available() -> bool:
 
 def run(title: str, status_text: Callable[[], str],
         on_open: Callable[[], None], on_quit: Callable[[], None],
-        on_ready: Callable[[object], None] | None = None) -> bool:
+        on_ready: Callable[[object], None] | None = None,
+        open_label: str = "Open", quit_label: str = "Quit") -> bool:
     """Run the tray icon loop on the CURRENT (main) thread until Quit.
 
     status_text() is called each time the menu opens (a live "N running" line).
@@ -80,8 +81,8 @@ def run(title: str, status_text: Callable[[], str],
 
         menu = pystray.Menu(
             pystray.MenuItem(lambda item: status_text(), None, enabled=False),
-            pystray.MenuItem("Open", lambda icon, item: on_open()),
-            pystray.MenuItem("Quit", _quit),
+            pystray.MenuItem(open_label, lambda icon, item: on_open()),
+            pystray.MenuItem(quit_label, _quit),
         )
         icon = pystray.Icon("email-export-import", _envelope_image(), title, menu=menu)
         icon_holder["icon"] = icon

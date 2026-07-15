@@ -53,9 +53,23 @@ def main(base_dir: Path | None = None) -> None:
     except ValueError:
         pass
 
+    # Localise the tray menu to the user's saved language.
+    try:
+        from ..gui.i18n import I18n
+        i18n = I18n()
+        open_label, quit_label = i18n.t("tray.show"), i18n.t("menu.quit")
+        status_tmpl = i18n.t("tray.status")
+    except Exception:
+        open_label, quit_label, status_tmpl = "Open", "Quit", "{count} migrations running"
+
     def _status() -> str:
         n = manager.active_count()
-        return f"{APP_TITLE} — {n} migrating" if n else f"{APP_TITLE} — idle"
+        if n:
+            try:
+                return status_tmpl.format(count=n)
+            except Exception:
+                return f"{n} running"
+        return APP_TITLE
 
     def _open_gui() -> None:
         try:
@@ -77,7 +91,8 @@ def main(base_dir: Path | None = None) -> None:
         # handle; the HTTP server is already serving on its own thread. If no
         # tray backend is available (headless), fall back to a plain wait.
         server._on_stop = stop.set  # until the tray wires its own stop
-        ran = trayapp.run(APP_TITLE, _status, _open_gui, _quit, on_ready=_on_ready)
+        ran = trayapp.run(APP_TITLE, _status, _open_gui, _quit, on_ready=_on_ready,
+                          open_label=open_label, quit_label=quit_label)
         if not ran:
             while not stop.is_set():
                 time.sleep(0.5)

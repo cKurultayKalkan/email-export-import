@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.20 — 2026-07-15
+
+### Changed
+- **Migrations really do run in the background now.** The tray icon moved out
+  of the app and into the daemon — the process that keeps running. So when you
+  close the app window, the daemon keeps migrating and its icon stays in the
+  menu bar (macOS) / system tray (Windows): click it to reopen the window, or
+  Quit to stop everything. Closing the window is just closing a viewer; the
+  work continues with no window open. Verified end to end on macOS: the daemon
+  outlives the GUI and keeps serving.
+- The daemon runs on every desktop OS now (set `EEI_NO_DAEMON=1` to force the
+  old in-process mode), starts at login, and its sidecar is signed/notarized
+  on macOS.
+
 ## v0.1.19 — 2026-07-15
 
 ### Added (CLI parity)
