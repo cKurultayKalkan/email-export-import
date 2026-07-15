@@ -467,6 +467,9 @@ def build_plan(
     on_spool: Callable[[bool], None],
     on_start: Callable[[], None],
     on_back: Callable[[], None],
+    can_remember: bool = False,
+    remember: bool = False,
+    on_remember: Callable[[bool], None] | None = None,
 ) -> ft.View:
     folders = _normalize_folders(plan)
     rows = [
@@ -518,6 +521,14 @@ def build_plan(
                         label=i18n.t("plan.spool"),
                         value=spool,
                         on_change=lambda e: on_spool(bool(e.control.value)),
+                    ),
+                    *(
+                        [ft.Checkbox(
+                            label=i18n.t("resume.remember"),
+                            value=remember,
+                            on_change=lambda e: on_remember(bool(e.control.value)),
+                        )]
+                        if can_remember and on_remember is not None else []
                     ),
                     ft.Text(i18n.t("plan.preserve_info"), size=12, italic=True),
                 ],

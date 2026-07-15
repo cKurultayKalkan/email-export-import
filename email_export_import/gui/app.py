@@ -36,6 +36,7 @@ class WizardState:
     plan_id: str | None = None
     plan_folders: list = field(default_factory=list)
     plan_total: int = 0
+    remember: bool = False  # save the passwords to the OS keychain on start
     # Set when the plan screen is entered from Resume (reuse the existing key
     # and title instead of minting a new session).
     resume_key: str | None = None
@@ -180,6 +181,30 @@ def _run_app(page: ft.Page) -> None:
         if dialog_open[0] > 0:
             dialog_open[0] -= 1
         page.pop_dialog()
+        try:
+            page.update()  # commit the dismiss
+        except Exception:
+            pass
+
+    def _defer(fn) -> None:
+        """Run fn AFTER the current dialog's dismiss animation. A dialog's
+        dismiss is animated/async: rebuilding page.views (or opening another
+        dialog) in the same handler races the animation and can leave the
+        dialog stuck on screen (seen on Windows). Deferring past it makes the
+        close reliable."""
+        async def _later():
+            await asyncio.sleep(0.3)
+            try:
+                fn()
+            except Exception:
+                pass
+
+        page.run_task(_later)
+
+    def close_then(fn) -> None:
+        """Close the current dialog, then run fn once its dismiss finishes."""
+        pop_dialog()
+        _defer(fn)
 
     # Blocking-work indicator: a dimmed full-page layer with a centred spinner.
     # Connecting/planning against a rate-limiting server can take many seconds
@@ -233,9 +258,11 @@ def _run_app(page: ft.Page) -> None:
 
     def set_locale(locale: str) -> None:
         i18n.set_locale(locale)
-        pop_dialog()
-        show_dashboard()  # chrome + rows in the new language
-        show_settings()   # reopen the dialog, re-rendered
+
+        def _reopen() -> None:
+            show_dashboard()  # chrome + rows in the new language
+            show_settings()   # reopen the dialog, re-rendered
+        close_then(_reopen)
 
     def set_max_active(n: int) -> None:
         backend.set_max_active(n)
@@ -256,8 +283,7 @@ def _run_app(page: ft.Page) -> None:
         set_workers(1)
         set_max_active(1)
         set_rate_limit(2 * 1024 * 1024)
-        pop_dialog()
-        show_settings()  # reopen so the dropdowns show the new values
+        close_then(show_settings)  # reopen so the dropdowns show the new values
 
     def set_autostart(on: bool) -> None:
         from ..daemon import autostart
@@ -348,9 +374,8 @@ def _run_app(page: ft.Page) -> None:
         # Cancelling is a click away on every card, so guard it behind an
         # "are you sure?" confirmation — a misclick must not discard a run.
         def confirm(_e=None) -> None:
-            pop_dialog()
             backend.cancel(key)
-            refresh_current()
+            close_then(refresh_current)
 
         show_dialog(
             ft.AlertDialog(
@@ -528,8 +553,7 @@ def _run_app(page: ft.Page) -> None:
             cfg["src"] = src_collect()
             cfg["dst"] = dst_collect()
             backend.save_config(key, cfg)
-            pop_dialog()
-            show_dashboard()
+            close_then(show_dashboard)
 
         show_dialog(
             ft.AlertDialog(
@@ -634,26 +658,38 @@ def _run_app(page: ft.Page) -> None:
                 on_error=ui(lambda exc: _test_done(account, acc, None, exc)),
             )
 
-        def _test_done(account, acc: dict, result, exc: Exception | None = None) -> None:
+        def _stop_busy() -> None:
             show_loading(False)
             handles["set_busy"](False)
+
+        def _test_done(account, acc: dict, result, exc: Exception | None = None) -> None:
             if exc is not None:
+                _stop_busy()
                 status.value = str(exc)
                 safe_update(status)
                 return
             if result.get("ok"):
-                status.value = i18n.t("account.connected")
-                safe_update(status)
                 if role == "source":
+                    _stop_busy()
+                    status.value = i18n.t("account.connected")
+                    safe_update(status)
                     ws.src = acc
                     ws.skip = Controller.default_skip(handles["preset_key"]())
                     go_account("dest")
                 else:
                     ws.dst = acc
+                    # Keep the dialog's spinner turning and show what's happening
+                    # while the folder plan is built — go_plan replaces this
+                    # dialog once it's ready. (The full-page loading overlay sits
+                    # behind the modal, so the inline spinner is what's visible.)
+                    status.value = i18n.t("loading.plan")
+                    safe_update(status)
                     go_plan()
             elif result.get("kind") == "cert":
+                _stop_busy()
                 _cert_dialog(account)
             else:
+                _stop_busy()
                 status.value = i18n.t(f"error.{result.get('kind')}")
                 safe_update(status)
 
@@ -715,33 +751,47 @@ def _run_app(page: ft.Page) -> None:
         def on_spool(enabled: bool) -> None:
             ws.spool = enabled
 
+        def on_remember(enabled: bool) -> None:
+            ws.remember = enabled
+
         def _plan_dialog() -> ft.AlertDialog:
             back = pop_dialog if ws.resume_key else (lambda: go_account("dest"))
             return views.build_plan(
                 i18n, ws.plan_folders, ws.skip, ws.workers, ws.spool,
                 on_toggle, on_workers, on_spool, start_migration, back,
+                can_remember=secrets_store.available(),
+                remember=ws.remember, on_remember=on_remember,
             )
 
         pop_dialog()  # replace the account step / previous plan render
         show_dialog(_plan_dialog())
 
+    def _remember_wizard_passwords() -> None:
+        if not (ws.remember and ws.src and ws.dst):
+            return
+        secrets_store.save_password(ws.src.get("host", ""), ws.src.get("email", ""),
+                                    "source", ws.src.get("password", ""))
+        secrets_store.save_password(ws.dst.get("host", ""), ws.dst.get("email", ""),
+                                    "dest", ws.dst.get("password", ""))
+
     def start_migration() -> None:
-        pop_dialog()  # the plan dialog
+        pop_dialog()  # close the plan dialog now (commits its dismiss)
         key = ws.resume_key or f"{ws.src['email']}__{ws.dst['email']}"
         existing = next((s for s in backend.snapshot_all() if s.key == key), None)
         if existing is not None and existing.status in ("running", "stopping"):
             highlight[0] = key
-            back_to_dashboard()
+            _defer(back_to_dashboard)
             return
         title = ws.resume_title or f"{ws.src['email']} → {ws.dst['email']}"
+        _remember_wizard_passwords()  # keychain, if the user opted in
         try:
             key = backend.start(ws.plan_id, sorted(ws.skip), ws.workers,
                                 ws.spool, title)
         except Exception as exc:  # noqa: BLE001
-            _show_error(str(exc))
+            _defer(lambda: _show_error(str(exc)))
             return
         highlight[0] = key
-        back_to_dashboard()
+        _defer(back_to_dashboard)
 
     # ---- bulk ----------------------------------------------------------
 

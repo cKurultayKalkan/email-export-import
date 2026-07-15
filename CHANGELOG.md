@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.18 — 2026-07-15
+
+### Fixed
+- **Dialogs now close reliably.** Clicking Start migration, or confirming a
+  cancel, left the modal stuck on screen (seen on Windows) even though the
+  action ran behind it: rebuilding the window in the same handler raced the
+  dialog's dismiss animation. The rebuild now happens after the dialog has
+  closed. (This also unblocks reaching the Dismiss action to remove a
+  cancelled/finished migration.)
+- **Progress is visible while the folder plan builds.** After a successful
+  destination connection the wizard now keeps its spinner turning and shows
+  "Reading folders…" instead of looking idle until the plan appears.
+
+### Added
+- **Remember passwords in the new-migration wizard too.** The plan screen
+  offers the same opt-in OS-keychain "remember" choice the resume dialog has
+  (shown only when a secure store is available).
+
 ## v0.1.17 — 2026-07-15
 
 ### Fixed
