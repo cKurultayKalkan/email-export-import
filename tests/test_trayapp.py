@@ -17,6 +17,27 @@ def test_available_returns_bool_without_raising():
     assert isinstance(trayapp.available(), bool)
 
 
+def test_build_run_lines_formats_active_runs_only():
+    from email_export_import.daemon.__main__ import _build_run_lines
+    from email_export_import.gui.run_manager import RunSnapshot
+
+    snaps = [
+        RunSnapshot(key="a", title="a@x → b@y", status="running",
+                    processed=10000, total=29000, current_folder="INBOX"),
+        RunSnapshot(key="b", title="c → d", status="done",
+                    processed=5, total=5, current_folder=None),
+        RunSnapshot(key="c", title="e → f", status="queued",
+                    processed=0, total=0, current_folder=None),
+    ]
+    started = {"a": 1000.0, "c": None}
+    fmt = "{title} · {done}/{total} · {mins}m"
+    lines = _build_run_lines(snaps, started, now=1000.0 + 34 * 60, line_fmt=fmt)
+
+    assert len(lines) == 2  # running + queued; the done run is excluded
+    assert lines[0] == "a@x → b@y · 10,000/29,000 · 34m"  # thousands + minutes
+    assert lines[1] == "e → f · 0/? · 0m"  # total 0 -> "?", no start -> 0m
+
+
 def test_run_declines_without_a_backend(monkeypatch):
     # No usable tray backend -> run() returns False (the daemon then falls back
     # to a plain serve loop) and touches none of the callbacks.

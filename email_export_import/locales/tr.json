@@ -138,6 +138,8 @@
   "panel.source": "Kaynak",
   "panel.dest": "Hedef",
   "tray.status": "{count} taşıma çalışıyor",
+  "tray.idle": "Aktarım yok",
+  "tray.run_line": "{title} · {done}/{total} · {mins}dk",
   "about.body": "Sürüm {version}\n\nBir posta kutusunu IMAP sunucuları arasında taşır — klasörler, işaretler, tarihler ve ekler korunur.",
   "about.github": "GitHub sayfası",
   "close.confirm_title": "Taşımalar hâlâ çalışıyor",

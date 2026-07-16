@@ -100,14 +100,28 @@ def _alive_retry(client: DaemonClient, tries: int = 3, delay: float = 0.15) -> b
     return False
 
 
+def _macos_bundle_id(app: str) -> str | None:
+    """The CFBundleIdentifier of a .app bundle, or None if unreadable."""
+    try:
+        import plistlib
+        with open(Path(app) / "Contents" / "Info.plist", "rb") as fh:
+            bid = plistlib.load(fh).get("CFBundleIdentifier")
+        return bid or None
+    except Exception:
+        return None
+
+
 def gui_command() -> list[str]:
     """The argv the daemon uses to open the GUI (tray → Show window).
 
-    On macOS the daemon runs OUTSIDE the .app (see daemon_command), so the app
-    bundle is not "already running" and a plain `open <app>` launches the GUI
-    (or focuses it if it's already open) — no blank window, native single
-    instance. The app path is passed in via EEI_GUI_APP when the daemon is
-    spawned. From source, re-exec this interpreter into the GUI entry."""
+    On macOS the daemon runs OUTSIDE the .app (see daemon_command). We launch by
+    BUNDLE ID (`open -b <id>`) rather than by path: a quarantined app first runs
+    App-Translocated from an ephemeral /private/.../AppTranslocation/ path, and
+    re-opening that now-stale path renders a GRAY window. `open -b` always does a
+    fresh LaunchServices launch of the registered app (the /Applications copy),
+    so Show window renders every time. Falls back to `open <path>` if the bundle
+    id can't be read. The app path is passed in via EEI_GUI_APP when the daemon
+    is spawned. From source, re-exec this interpreter into the GUI entry."""
     if sys.platform == "darwin":
         app = os.environ.get("EEI_GUI_APP")
         if not app:
@@ -117,6 +131,9 @@ def gui_command() -> list[str]:
                     app = str(p)
                     break
         if app:
+            bid = _macos_bundle_id(app)
+            if bid:
+                return ["open", "-b", bid]
             return ["open", str(app)]
     exe = Path(sys.executable)
     # The GUI entry point — NOT `email-export-import`, which is the CLI wizard.

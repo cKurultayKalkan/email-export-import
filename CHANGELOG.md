@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.27 — 2026-07-16
+
+### Fixed
+- **Gray "Show window" on macOS.** A browser-downloaded app is run
+  App-Translocated from an ephemeral `/private/.../AppTranslocation/` path;
+  re-opening that now-stale path rendered a gray window. The tray now launches
+  the GUI by **bundle id** (`open -b`), which always does a fresh
+  LaunchServices launch of the installed app. (Tip: moving the app to
+  `/Applications` and/or clearing its quarantine flag stops translocation
+  entirely.)
+
+### Added
+- **The tray menu now lists each running migration with live progress** —
+  `source → dest · done/total · Nm` — so you can check status (and how long it's
+  been running) straight from the menu bar without opening the window.
+
 ## v0.1.26 — 2026-07-16
 
 ### Fixed

@@ -44,17 +44,23 @@ def available() -> bool:
     return True
 
 
+RUN_SLOTS = 8  # max per-migration lines shown under the tray status header
+
+
 def run(title: str, status_text: Callable[[], str],
         on_open: Callable[[], None], on_quit: Callable[[], None],
         on_ready: Callable[[object], None] | None = None,
-        open_label: str = "Open", quit_label: str = "Quit") -> bool:
+        open_label: str = "Open", quit_label: str = "Quit",
+        run_lines: Callable[[], list[str]] | None = None) -> bool:
     """Run the tray icon loop on the CURRENT (main) thread until Quit.
 
-    status_text() is called each time the menu opens (a live "N running" line).
-    on_open launches/reveals the GUI; on_quit stops the daemon. on_ready(icon)
-    is called once the icon exists so the caller can stop it from another thread
-    (e.g. an HTTP /shutdown). Returns False immediately if no tray backend is
-    usable (caller then falls back to a plain serve loop)."""
+    status_text() is the header line (a live "N running"), refreshed each menu
+    open. run_lines() (optional) returns one string per active migration —
+    rendered as disabled lines below the header so the user sees progress
+    without opening the window. on_open launches/reveals the GUI; on_quit stops
+    the daemon. on_ready(icon) is called once the icon exists so the caller can
+    stop it from another thread (e.g. an HTTP /shutdown). Returns False
+    immediately if no tray backend is usable (caller falls back to a serve loop)."""
     if not available():
         return False
     try:
@@ -79,11 +85,28 @@ def run(title: str, status_text: Callable[[], str],
             finally:
                 icon.stop()
 
-        menu = pystray.Menu(
-            pystray.MenuItem(lambda item: status_text(), None, enabled=False),
-            pystray.MenuItem(open_label, lambda icon, item: on_open()),
-            pystray.MenuItem(quit_label, _quit),
-        )
+        # A fixed pool of per-run slots (pystray needs a static item count): each
+        # is visible only while there's a run at its index, and its text/visible
+        # callables re-evaluate every time the menu opens (live progress).
+        def _slot_text(i):
+            def f(item):
+                lines = run_lines() if run_lines else []
+                return lines[i] if i < len(lines) else ""
+            return f
+
+        def _slot_visible(i):
+            def f(item):
+                lines = run_lines() if run_lines else []
+                return i < len(lines)
+            return f
+
+        items = [pystray.MenuItem(lambda item: status_text(), None, enabled=False)]
+        for i in range(RUN_SLOTS):
+            items.append(pystray.MenuItem(_slot_text(i), None, enabled=False,
+                                          visible=_slot_visible(i)))
+        items.append(pystray.MenuItem(open_label, lambda icon, item: on_open()))
+        items.append(pystray.MenuItem(quit_label, _quit))
+        menu = pystray.Menu(*items)
         icon = pystray.Icon("email-export-import", _envelope_image(), title, menu=menu)
         icon_holder["icon"] = icon
         if on_ready is not None:

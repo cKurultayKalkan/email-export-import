@@ -131,9 +131,17 @@ def test_ensure_external_copy_is_idempotent_and_updates_on_new_build(tmp_path):
     assert dst.read_bytes() == b"BINARYv1-LONGER"
 
 
-def test_gui_command_opens_the_app_on_macos(monkeypatch):
-    # On macOS the tray launches the GUI with `open <app>` (app path from env).
+def test_gui_command_opens_by_bundle_id_on_macos(monkeypatch):
+    # On macOS the tray launches the GUI by BUNDLE ID (open -b), so a fresh
+    # LaunchServices launch avoids the stale App-Translocation path (gray window).
     monkeypatch.setattr(lifecycle.sys, "platform", "darwin")
     monkeypatch.setenv("EEI_GUI_APP", "/Applications/Email Export Import Tool.app")
-    assert lifecycle.gui_command() == [
-        "open", "/Applications/Email Export Import Tool.app"]
+    monkeypatch.setattr(lifecycle, "_macos_bundle_id", lambda app: "com.example.eei")
+    assert lifecycle.gui_command() == ["open", "-b", "com.example.eei"]
+
+
+def test_gui_command_falls_back_to_path_when_bundle_id_unknown(monkeypatch):
+    monkeypatch.setattr(lifecycle.sys, "platform", "darwin")
+    monkeypatch.setenv("EEI_GUI_APP", "/some/Where/App.app")
+    monkeypatch.setattr(lifecycle, "_macos_bundle_id", lambda app: None)
+    assert lifecycle.gui_command() == ["open", "/some/Where/App.app"]

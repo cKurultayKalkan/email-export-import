@@ -46,6 +46,26 @@ def _unlink_if_mine(path: Path, pid: int) -> None:
         path.unlink(missing_ok=True)
 
 
+def _build_run_lines(snaps, started_ats: dict, now: float, line_fmt: str) -> list[str]:
+    """One tray line per ACTIVE run — 'title · done/total · Nm' — so the user
+    sees progress by clicking the tray, without opening the window. started_ats
+    maps key → first-start epoch for a live "running for N minutes"; a missing
+    value yields 0. Pure/for-testing: the daemon feeds it live snapshots."""
+    lines: list[str] = []
+    for s in snaps:
+        if s.status not in ("running", "stopping", "queued"):
+            continue
+        started = started_ats.get(s.key)
+        mins = int(max(0.0, now - started) / 60) if started else 0
+        total = f"{s.total:,}" if s.total else "?"
+        try:
+            lines.append(line_fmt.format(title=s.title, done=f"{s.processed:,}",
+                                         total=total, mins=mins))
+        except Exception:
+            lines.append(f"{s.title} {s.processed}/{s.total}")
+    return lines
+
+
 def main(base_dir: Path | None = None) -> None:
     # Strict single-instance: hold a lifetime lock for the whole process. A
     # second daemon on the same base dir can't get it and exits here, BEFORE
@@ -84,6 +104,8 @@ def main(base_dir: Path | None = None) -> None:
     # Localise the tray menu to the user's saved language.
     open_label, quit_label = "Show window", "Quit"
     status_tmpl = "{count} migrations running"
+    idle_text = APP_TITLE
+    line_fmt = "{title} · {done}/{total} · {mins}m"
     try:
         from ..gui.i18n import I18n
         i18n = I18n()
@@ -96,6 +118,10 @@ def main(base_dir: Path | None = None) -> None:
             quit_label = v
         if (v := i18n.t("tray.status")) != "tray.status":
             status_tmpl = v
+        if (v := i18n.t("tray.idle")) != "tray.idle":
+            idle_text = v
+        if (v := i18n.t("tray.run_line")) != "tray.run_line":
+            line_fmt = v
     except Exception:
         pass
 
@@ -106,7 +132,14 @@ def main(base_dir: Path | None = None) -> None:
                 return status_tmpl.format(count=n)
             except Exception:
                 return f"{n} running"
-        return APP_TITLE
+        return idle_text
+
+    def _status_lines() -> list[str]:
+        # One line per active run (progress + minutes), refreshed each menu open.
+        snaps = manager.snapshot_all()
+        started = {s.key: (r.state.started_at if (r := manager.get(s.key)) else None)
+                   for s in snaps}
+        return _build_run_lines(snaps, started, time.time(), line_fmt)
 
     def _open_gui() -> None:
         # Closing a daemon-backed GUI fully exits its process (it is never just
@@ -147,7 +180,8 @@ def main(base_dir: Path | None = None) -> None:
         # tray backend is available (headless), fall back to a plain wait.
         server._on_stop = stop.set  # until the tray wires its own stop
         ran = trayapp.run(APP_TITLE, _status, _open_gui, _quit, on_ready=_on_ready,
-                          open_label=open_label, quit_label=quit_label)
+                          open_label=open_label, quit_label=quit_label,
+                          run_lines=_status_lines)
         if not ran:
             while not stop.is_set():
                 time.sleep(0.5)
