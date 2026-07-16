@@ -32,9 +32,11 @@ class I18n:
         }
         if locale is not None and locale not in self._tables:
             locale = None
-        # Default to English; the OS locale is deliberately not consulted so
-        # the app is predictable. A saved preference or explicit choice wins.
-        self.locale = locale or self._saved_locale() or FALLBACK
+        # Precedence: explicit arg > saved preference > detected OS language >
+        # English. A manual selection is persisted and always wins over the OS
+        # guess, so the app stays predictable once the user has chosen.
+        self.locale = (locale or self._saved_locale()
+                       or self._detected_locale() or FALLBACK)
 
     def _saved_locale(self) -> str | None:
         try:
@@ -42,6 +44,12 @@ class I18n:
         except Exception:
             return None
         return saved if saved in self._tables else None
+
+    def _detected_locale(self) -> str | None:
+        """The OS language on first launch (only when nothing is saved). Matched
+        against the locales we actually ship; unknown → None → English."""
+        lang = _system_locale()
+        return lang if lang in self._tables else None
 
     def set_locale(self, locale: str) -> None:
         if locale not in self._tables:

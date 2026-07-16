@@ -8,7 +8,15 @@ from ..models import Account
 from ..providers import list_presets
 from . import sysinfo
 from .controller import PlanResult
-from .i18n import I18n
+from .i18n import I18n, available_locales
+
+# Native names for the language picker; a shipped locale without an entry here
+# just shows its code (still selectable). Keep in sync with locales/*.json.
+_LOCALE_NAMES = {
+    "en": "English", "tr": "Türkçe", "es": "Español", "fr": "Français",
+    "de": "Deutsch", "pt": "Português", "ru": "Русский", "zh": "中文",
+    "ar": "العربية", "hi": "हिन्दी",
+}
 from .run_manager import RunSnapshot
 
 
@@ -47,10 +55,8 @@ def build_settings(
         label=i18n.t("settings.language"),
         value=i18n.locale,
         width=280,
-        options=[
-            ft.dropdown.Option("tr", "Türkçe"),
-            ft.dropdown.Option("en", "English"),
-        ],
+        options=[ft.dropdown.Option(loc, _LOCALE_NAMES.get(loc, loc))
+                 for loc in available_locales()],
         on_select=lambda e: on_locale(e.control.value),
     )
     concurrency = ft.Dropdown(

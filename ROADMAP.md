@@ -30,7 +30,8 @@ everywhere. See `CLAUDE.md` for architecture.
   plaintext)
 - ✅ Multi-platform packaged builds — Windows, macOS (signed + notarized), Linux
 - ✅ Menu-bar / system-tray control with live per-migration progress
-- ✅ Localization: **English + Turkish**
+- ✅ Localization: **10 languages** (English, Turkish, Spanish, French, German,
+  Portuguese, Russian, Chinese, Arabic, Hindi), **auto-detected from the OS**
 
 ---
 
@@ -75,10 +76,12 @@ everywhere. See `CLAUDE.md` for architecture.
   landed, export a summary
 
 ### Localization & accessibility
-- 📋 **More UI languages** (currently EN/TR) — the i18n plumbing already exists;
-  new locales are just a JSON file 🙌 (good first contribution)
-- 📋 **Auto-detect UI language from the OS locale** on first launch (with a
-  manual override in Settings) 🙌
+- ✅ **10 UI languages** — EN, TR, ES, FR, DE, PT, RU, ZH, AR, HI. New locales
+  are just a JSON file 🙌 (**native-speaker review** of the machine-assisted
+  translations is very welcome — open a PR against `locales/<code>.json`)
+- ✅ **Auto-detect the UI language from the OS locale** on first launch, with a
+  manual override in Settings
+- 💡 Right-to-left (RTL) layout polish for Arabic
 
 ### Setup guides (docs)
 Clear, screenshot-led guides — a huge amount of user pain is just provider setup:

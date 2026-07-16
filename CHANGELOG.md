@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.31 — 2026-07-16
+
+### Added
+- **8 new interface languages** — Spanish, French, German, Portuguese, Russian,
+  Chinese, Arabic and Hindi, joining English and Turkish (10 total). All are
+  selectable from **Settings → Language** (shown in their native names).
+- **The interface language is auto-detected from your operating system** on
+  first launch. A manual choice in Settings is remembered and always wins.
+
+_The 8 new translations are machine-assisted — native-speaker corrections are
+welcome via a PR against `email_export_import/locales/<code>.json`._
+
 ## v0.1.30 — 2026-07-16
 
 ### Fixed

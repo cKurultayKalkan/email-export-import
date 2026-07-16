@@ -18,6 +18,7 @@ flags, original dates, and attachments preserved.**
 
 [**⬇ Download the app**](#download-the-app-no-coding-required) ·
 [Documentation](#contents) ·
+[Roadmap](ROADMAP.md) ·
 [Changelog](CHANGELOG.md) ·
 [Report a bug](https://github.com/cKurultayKalkan/email-export-import/issues/new) ·
 [Request a feature](https://github.com/cKurultayKalkan/email-export-import/issues/new)
