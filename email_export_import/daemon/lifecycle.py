@@ -44,6 +44,62 @@ def _client_for(info: dict) -> DaemonClient:
     return DaemonClient(f"http://127.0.0.1:{info['port']}", token=info["token"])
 
 
+def _lock_path(base_dir: Path | None = None) -> Path:
+    return (base_dir or DEFAULT_BASE_DIR) / "daemon.lock"
+
+
+def acquire_singleton_lock(base_dir: Path | None = None) -> int | None:
+    """Take the daemon's lifetime lock.
+
+    Returns an OPEN file descriptor on success — the caller MUST keep it open
+    for the whole process life; the OS releases the lock on exit or crash (no
+    stale PID files to reap). Returns None if another daemon already holds it.
+
+    This is the daemon's single-instance guard: a second daemon that cannot get
+    the lock exits before it ever creates a rival tray icon. It is a separate
+    lock from anything the GUI/connect_or_spawn holds, so there is no
+    parent-holds-while-child-waits deadlock.
+    """
+    base = base_dir if base_dir is not None else DEFAULT_BASE_DIR
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        os.chmod(base, 0o700)
+    except OSError:
+        pass
+    try:
+        fd = os.open(_lock_path(base), os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError:
+        return None
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None  # already held by a live daemon
+    except Exception:  # noqa: BLE001
+        # Never let an odd-platform locking quirk block the daemon from running
+        # — degrade to no-lock rather than refuse to start.
+        return fd
+    return fd
+
+
+def _alive_retry(client: DaemonClient, tries: int = 3, delay: float = 0.15) -> bool:
+    """Ping a daemon a few times before writing it off: one dropped tick must
+    not condemn a healthy daemon as stale, which would spawn a rival daemon
+    (that then can't get the lock and dies, leaving the GUI unable to connect)."""
+    for i in range(tries):
+        if client.is_alive():
+            return True
+        if i < tries - 1:
+            time.sleep(delay)
+    return False
+
+
 def gui_command() -> list[str]:
     """The argv the daemon uses to open the GUI (tray → Show window).
 
@@ -63,8 +119,9 @@ def gui_command() -> list[str]:
         if app:
             return ["open", str(app)]
     exe = Path(sys.executable)
-    gui_name = ("email-export-import.exe" if sys.platform == "win32"
-                else "email-export-import")
+    # The GUI entry point — NOT `email-export-import`, which is the CLI wizard.
+    gui_name = ("email-export-import-gui.exe" if sys.platform == "win32"
+                else "email-export-import-gui")
     sibling = exe.with_name(gui_name)
     if sibling.exists() and sibling != exe:
         return [str(sibling)]
@@ -154,7 +211,7 @@ def connect_or_spawn(base_dir: Path | None = None,
     info = _read_rendezvous(base)
     if info is not None:
         client = _client_for(info)
-        if client.is_alive():
+        if _alive_retry(client):
             applog.log("gui", "connected to existing daemon", base)
             return client
         # Stale file: the daemon it named is gone. Fall through to spawn.

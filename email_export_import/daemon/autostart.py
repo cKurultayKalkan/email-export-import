@@ -46,6 +46,17 @@ def _plist_path(home: Path) -> Path:
     return home / "Library" / "LaunchAgents" / f"{LABEL}.plist"
 
 
+def _macos_gui_app() -> str | None:
+    """The .app bundle enclosing this process, if any, so a login-launched
+    daemon can open the GUI with `open <app>` (its tray "Show window"). Returns
+    None from source (no bundle) — the tray falls back to gui_command's sibling."""
+    exe = Path(sys.executable)
+    for p in exe.parents:
+        if p.suffix == ".app":
+            return str(p)
+    return None
+
+
 def _desktop_path(home: Path) -> Path:
     return home / ".config" / "autostart" / LINUX_DESKTOP_NAME
 
@@ -65,6 +76,12 @@ def _macos_install(home: Path) -> bool:
         # (e.g. after finishing / a clean shutdown); RunAtLoad alone is enough.
         "KeepAlive": False,
     }
+    # launchd launches the daemon with a bare environment, so without this the
+    # login-started daemon has no EEI_GUI_APP and its tray "Show window" can't
+    # `open <app>`. Inject it when we can resolve the enclosing bundle.
+    app = _macos_gui_app()
+    if app:
+        plist["EnvironmentVariables"] = {"EEI_GUI_APP": app}
     with open(path, "wb") as fh:
         plistlib.dump(plist, fh)
     # Best effort: load it now so it also runs this session. A failure here

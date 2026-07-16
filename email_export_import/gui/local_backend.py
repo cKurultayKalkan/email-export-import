@@ -55,8 +55,9 @@ class LocalBackend:
         return self._manager.snapshot_all()
 
     def poll_events(self) -> dict:
-        """No out-of-process tray in local mode — never a show/quit request."""
-        return {"show": False, "quit": False}
+        """No out-of-process tray/daemon in local mode — same shape as
+        DaemonBackend so app.py's poll treats both alike, but nothing to lose."""
+        return {"show": False, "quit": False, "daemon_lost": False}
 
     def config_for(self, key: str) -> dict | None:
         run = self._manager.get(key)

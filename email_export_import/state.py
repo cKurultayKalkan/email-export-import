@@ -4,7 +4,10 @@ import json
 import os
 from pathlib import Path
 
-DEFAULT_BASE_DIR = Path.home() / ".email-export-import"
+# EEI_BASE_DIR overrides the state directory (the daemon already honors it;
+# reading it here keeps the GUI/CLI in the same place — handy for an isolated
+# local test run without touching the installed app's ~/.email-export-import).
+DEFAULT_BASE_DIR = Path(os.environ.get("EEI_BASE_DIR") or (Path.home() / ".email-export-import"))
 
 
 class MigrationState:

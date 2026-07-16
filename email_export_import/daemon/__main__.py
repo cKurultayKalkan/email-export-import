@@ -20,7 +20,7 @@ from pathlib import Path
 from .. import applog
 from ..gui.run_manager import RunManager
 from . import trayapp
-from .lifecycle import gui_command, rendezvous_path
+from .lifecycle import acquire_singleton_lock, gui_command, rendezvous_path
 from .server import DaemonServer
 
 APP_TITLE = "Email Export Import Tool"
@@ -34,7 +34,28 @@ def _write_rendezvous(path: Path, port: int, token: str) -> None:
     os.chmod(path, 0o600)
 
 
+def _unlink_if_mine(path: Path, pid: int) -> None:
+    """Remove the rendezvous ONLY if it still names this daemon. Deleting a
+    file that now points at a different, live daemon would orphan it and trigger
+    a rival spawn — the exact multiple-tray-icon cascade we are closing."""
+    try:
+        info = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if info.get("pid") == pid:
+        path.unlink(missing_ok=True)
+
+
 def main(base_dir: Path | None = None) -> None:
+    # Strict single-instance: hold a lifetime lock for the whole process. A
+    # second daemon on the same base dir can't get it and exits here, BEFORE
+    # creating a rival tray icon or clobbering the rendezvous.
+    lock_fd = acquire_singleton_lock(base_dir)
+    if lock_fd is None:
+        applog.log("daemon", "another daemon already owns this base dir; exiting",
+                   base_dir)
+        return
+
     manager = RunManager(state_dir=base_dir)
     manager.load_resumable()
     manager.load_completed()
@@ -51,9 +72,12 @@ def main(base_dir: Path | None = None) -> None:
     stop = threading.Event()
     # signal handlers can only be installed from the main thread; tests drive
     # main() on a worker thread and stop it via the rendezvous /shutdown.
+    # request_stop() routes through _on_stop, which the tray wires to icon.stop
+    # — a plain stop.set() would be ignored while the tray's icon.run() blocks
+    # the main thread (SIGTERM then never actually stops the daemon).
     try:
         for sig in (signal.SIGINT, signal.SIGTERM):
-            signal.signal(sig, lambda *a: stop.set())
+            signal.signal(sig, lambda *a: server.request_stop())
     except ValueError:
         pass
 
@@ -85,14 +109,12 @@ def main(base_dir: Path | None = None) -> None:
         return APP_TITLE
 
     def _open_gui() -> None:
-        # A GUI already open: focus it via the show flag. Otherwise launch one —
-        # the daemon runs outside the .app, so `open <app>` renders a real GUI.
-        if server.gui_alive():
-            applog.log("daemon", "tray Show: GUI alive, requesting focus", base_dir)
-            server.request_show()
-            return
+        # Closing a daemon-backed GUI fully exits its process (it is never just
+        # hidden), so there is never a window-less GUI to "reveal" — always
+        # launch. The daemon runs outside the .app, so `open <app>` renders a
+        # real GUI, and macOS coalesces it to a focus when one is already open.
         cmd = gui_command()
-        applog.log("daemon", f"tray Show: launching GUI cmd={cmd}", base_dir)
+        applog.log("daemon", f"tray Show: launch/focus GUI cmd={cmd}", base_dir)
         try:
             subprocess.Popen(cmd, stdin=subprocess.DEVNULL,  # noqa: S603
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -100,12 +122,18 @@ def main(base_dir: Path | None = None) -> None:
             applog.log("daemon", f"tray Show: launch failed: {exc}", base_dir)
 
     def _quit() -> None:
-        # Ask a running GUI to close too, and give its poll a moment to see the
-        # flag before the daemon (and this server) go away.
+        # Ask a running GUI to close too, then WAIT for it to actually go away
+        # before tearing the server down. A fixed 0.5s sleep raced the GUI's
+        # poll: if the daemon stopped first, the GUI missed the quit latch and
+        # lingered window-less. Poll gui_alive (capped) so the common case is a
+        # clean, ordered shutdown; the GUI's daemon-lost backstop covers the rest.
         applog.log("daemon", "tray Quit", base_dir)
         server.request_quit_gui()
         if server.gui_alive():
-            time.sleep(0.5)
+            time.sleep(0.3)  # let the GUI poll read the quit latch and os._exit
+            deadline = time.monotonic() + 3.0
+            while server.gui_alive(within=0.6) and time.monotonic() < deadline:
+                time.sleep(0.1)
         stop.set()
 
     def _on_ready(icon) -> None:
@@ -126,7 +154,11 @@ def main(base_dir: Path | None = None) -> None:
     finally:
         applog.log("daemon", "stopping", base_dir)
         server.stop()
-        path.unlink(missing_ok=True)
+        _unlink_if_mine(path, os.getpid())  # never delete a live daemon's file
+        try:
+            os.close(lock_fd)  # release the singleton lock
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":

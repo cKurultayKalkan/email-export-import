@@ -78,6 +78,40 @@ def test_connect_returns_none_if_spawn_never_appears(tmp_path, monkeypatch):
     assert lifecycle.connect_or_spawn(base_dir=tmp_path, timeout=0.5) is None
 
 
+def test_connect_retries_ping_before_declaring_stale(tmp_path, monkeypatch):
+    # A single transient ping miss must NOT respawn: the live daemon is re-pinged
+    # before the rendezvous is judged stale (a needless spawn would race the lock
+    # and leave the GUI unable to connect).
+    from email_export_import.daemon.client import DaemonClient
+    from email_export_import.daemon.server import DaemonServer
+    from email_export_import.gui.run_manager import RunManager
+
+    server = DaemonServer(RunManager(state_dir=tmp_path), token="tok")
+    server.start()
+    try:
+        rp = rendezvous_path(tmp_path)
+        rp.parent.mkdir(parents=True, exist_ok=True)
+        rp.write_text(json.dumps({"port": server.port, "token": "tok", "pid": 1}))
+
+        calls = {"n": 0}
+        real_alive = DaemonClient.is_alive
+
+        def flaky_alive(self):
+            calls["n"] += 1
+            return False if calls["n"] == 1 else real_alive(self)
+
+        monkeypatch.setattr(DaemonClient, "is_alive", flaky_alive)
+        spawned = []
+        monkeypatch.setattr(lifecycle, "_spawn", lambda base: spawned.append(base))
+
+        client = lifecycle.connect_or_spawn(base_dir=tmp_path)
+        assert client is not None
+        assert spawned == [], "a transient ping miss must not respawn"
+        assert calls["n"] >= 2, "the ping must be retried before giving up"
+    finally:
+        server.stop()
+
+
 def test_ensure_external_copy_is_idempotent_and_updates_on_new_build(tmp_path):
     # The daemon is copied out of the .app; a same-size copy is left alone, a
     # different-size (new build) is refreshed.

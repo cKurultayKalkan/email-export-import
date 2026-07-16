@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
+import threading
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -73,7 +75,11 @@ def _make_backend(prefs_values: dict):
     try:
         from ..daemon.lifecycle import connect_or_spawn
 
-        client = connect_or_spawn(timeout=8)
+        # The macOS daemon runs from a copy outside the .app; its first cold
+        # start (PyInstaller onefile extraction + Gatekeeper verification) was
+        # measured at ~12s, so allow generous headroom or we fall back to the
+        # in-process backend and lose the tray.
+        client = connect_or_spawn(timeout=25)
         if client is not None:
             backend = DaemonBackend(client)
             backend.set_max_active(prefs_values.get("max_active", 2))
@@ -113,6 +119,11 @@ def main() -> None:
     if _signal_existing_gui():
         return
     ft.app(target=_page_main)
+    # ft.app() returns once the window is closed natively. Force the process to
+    # end so no window-less interpreter lingers (a resident GUI would make the
+    # daemon think one is alive and "Show window" would focus nothing).
+    applog.log("gui", "ft.app returned; exiting process")
+    os._exit(0)
 
 
 def _report_startup_crash(page: ft.Page, tb: str) -> None:
@@ -229,14 +240,41 @@ def _run_app(page: ft.Page, backend, i18n: I18n, _prefs: dict) -> None:
         except RuntimeError:
             pass  # page closed / control unmounted
 
-    # ---- window reveal / close ------------------------------------------
-    # The daemon runs OUTSIDE the .app now, so closing the GUI simply lets this
-    # process exit (the daemon keeps migrating). The tray's "Show window"
-    # launches a fresh GUI when none is open, or — when one IS open — sets the
-    # show flag the poll below turns into this focus call. No hiding, no second
-    # blank window.
-    def _reveal_window() -> None:
+    # ---- closing a daemon-backed window ---------------------------------
+    # Closing a daemon-backed window FULLY EXITS this viewer process; the daemon
+    # (a separate process) keeps migrating and owns the tray, and "Show window"
+    # relaunches a fresh GUI.
+    #
+    # Two hard-won lessons from Flet/macOS shape this:
+    #  * HIDING the window (visible=False) disconnects the Flet client and
+    #    freezes the poll loop, so a hidden GUI can be neither revealed nor quit.
+    #    Never hide — exit.
+    #  * prevent_close=True + os._exit() leaves a FROZEN GHOST window: macOS asks
+    #    the Flutter client to defer the close to Python, Python then os._exit()s
+    #    without ever telling Flutter to close, so the window process is orphaned
+    #    on screen (looks like the red-X "does nothing"). So we DON'T prevent the
+    #    close — Flutter tears its own window down (no ghost) — and only make the
+    #    Python side follow.
+    def _exit_process() -> None:
+        os._exit(0)
+
+    def _close_and_exit(reason: str) -> None:
+        """End this viewer from code (tray Quit / daemon lost / menu Quit): ask
+        Flet to close the window so its Flutter client tears down cleanly, then
+        hard-exit as a bounded fallback (Flet's close is unreliable across
+        versions, so we never rely on it alone)."""
+        applog.log("gui", f"close viewer: {reason}")
         try:
+            page.run_task(page.window.close)
+        except Exception:
+            pass
+        threading.Timer(1.5, _exit_process).start()
+
+    def _reveal_window() -> None:
+        # Reached via the tray show flag when a launch focuses an already-open
+        # GUI; a closed GUI is gone, not hidden, so it is relaunched instead.
+        try:
+            page.window.skip_task_bar = False
             page.window.visible = True
             page.window.focused = True
             page.update()
@@ -244,11 +282,22 @@ def _run_app(page: ft.Page, backend, i18n: I18n, _prefs: dict) -> None:
         except Exception:
             pass
 
-    def _on_window_event(e) -> None:
-        if getattr(e, "type", None) == ft.WindowEventType.CLOSE:
-            applog.log("gui", "window close event")
+    if isinstance(backend, DaemonBackend):
+        # NOTE: no prevent_close — the red-X closes the Flutter window natively
+        # (no ghost). We only ensure the Python process follows.
+        def _on_window_event(e) -> None:
+            etype = getattr(e, "type", None)
+            applog.log("gui", f"window event type={etype!r}")
+            is_close = etype == ft.WindowEventType.CLOSE or \
+                str(getattr(etype, "value", etype)).lower() == "close"
+            if is_close:
+                applog.log("gui", "window close -> exit viewer (daemon keeps running)")
+                # The window is already closing natively; let Flutter finish its
+                # teardown, then make sure Python exits too (no window-less
+                # lingering process). A ghost is impossible here.
+                threading.Timer(0.4, _exit_process).start()
 
-    page.window.on_event = _on_window_event
+        page.window.on_event = _on_window_event
 
     # All dialogs go through these wrappers so the poll knows when a modal
     # is open: its 5x/second page.update() must pause then, or it races the
@@ -441,6 +490,7 @@ def _run_app(page: ft.Page, backend, i18n: I18n, _prefs: dict) -> None:
             on_dismiss=do_dismiss,
             on_edit=lambda: _edit_dialog(selected_key[0]),
             refs=refs,
+            on_new=start_wizard,
             folder_counts=backend.folder_counts(sel.key) if sel is not None else None,
             last_run=backend.last_run(sel.key) if sel is not None else None,
         )
@@ -672,11 +722,19 @@ def _run_app(page: ft.Page, backend, i18n: I18n, _prefs: dict) -> None:
                 # reveals THIS window and "Quit" from the tray closes it.
                 ev = backend.poll_events()
                 if ev.get("quit"):
-                    applog.log("gui", "tray quit received; destroying window")
-                    page.run_task(page.window.destroy)
+                    # Tray asked to fully quit: close the window (so its Flutter
+                    # client tears down — no ghost) then exit the process.
+                    _close_and_exit("tray quit")
+                    return
+                if ev.get("daemon_lost"):
+                    # The daemon we depend on has been unreachable long enough to
+                    # be considered gone (tray Quit killed it, or it crashed). A
+                    # viewer with no daemon is useless and must not linger — close
+                    # the window and exit so a relaunch starts cleanly.
+                    _close_and_exit("daemon lost")
                     return
                 if ev.get("show"):
-                    applog.log("gui", "tray show received; focusing window")
+                    applog.log("gui", "tray show received; revealing window")
                     _reveal_window()
                 pump_bulk()  # start queued bulk accounts as slots free (on-loop)
                 if dialog_open[0]:
@@ -963,8 +1021,13 @@ def _run_app(page: ft.Page, backend, i18n: I18n, _prefs: dict) -> None:
         )
 
     def request_quit() -> None:
-        if isinstance(backend, DaemonBackend) or not _work_pending():
-            page.run_task(page.window.destroy)  # daemon (if any) keeps running
+        if isinstance(backend, DaemonBackend):
+            # The daemon keeps migrating and owns the tray, so this is just
+            # closing the viewer — close the window cleanly then exit.
+            _close_and_exit("menu quit")
+            return
+        if not _work_pending():
+            page.run_task(page.window.destroy)  # no daemon: nothing to keep alive
             return
 
         def _quit(_e=None) -> None:

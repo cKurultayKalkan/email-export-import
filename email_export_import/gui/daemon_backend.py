@@ -9,6 +9,7 @@ until the swap is wired and proven.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from ..daemon.client import DaemonClient, DaemonError
@@ -50,9 +51,18 @@ class DaemonBackend:
     don't each cost a round-trip; refresh() (called by the poll) updates them.
     """
 
+    # How long the daemon may be continuously unreachable before a daemon-backed
+    # GUI concludes it is gone (tray Quit killed it, or it crashed) and exits —
+    # a viewer with no daemon to talk to is useless. Long enough to ride out a
+    # transient blip, short enough that the window doesn't linger after Quit.
+    _LOST_GRACE = 5.0
+
     def __init__(self, client: DaemonClient) -> None:
         self._client = client
         self._last: list[dict] = []
+        # Daemon-reachability tracking for the daemon_lost signal.
+        self._now = time.monotonic
+        self._unreachable_since: float | None = None
         # Settings are read once and mirrored locally; setters write through.
         s = self._safe_settings()
         self.max_active = s.get("max_active", 2)
@@ -74,13 +84,24 @@ class DaemonBackend:
         return [_snapshot_from_wire(d) for d in self._last]
 
     def poll_events(self) -> dict:
-        """Heartbeat the daemon and return one-shot {show, quit} tray requests.
-        Called every poll tick; failures are treated as "nothing to do"."""
+        """Heartbeat the daemon and return {show, quit, daemon_lost}.
+
+        Called every poll tick. `show`/`quit` are one-shot tray requests. A
+        single unreachable tick is tolerated (transient blip); `daemon_lost`
+        only goes True once the daemon has been continuously unreachable for
+        _LOST_GRACE, so the GUI can exit instead of lingering after a tray Quit
+        that its poll happened to miss."""
         try:
             ev = self._client.events()
-            return {"show": bool(ev.get("show")), "quit": bool(ev.get("quit"))}
+            self._unreachable_since = None  # a good tick clears any pending loss
+            return {"show": bool(ev.get("show")), "quit": bool(ev.get("quit")),
+                    "daemon_lost": False}
         except DaemonError:
-            return {"show": False, "quit": False}
+            now = self._now()
+            if self._unreachable_since is None:
+                self._unreachable_since = now
+            lost = (now - self._unreachable_since) >= self._LOST_GRACE
+            return {"show": False, "quit": False, "daemon_lost": lost}
 
     def _cached(self, key: str) -> dict | None:
         for d in self._last:

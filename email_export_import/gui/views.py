@@ -1065,6 +1065,7 @@ def build_run_list(
     selected_key: str | None,
     on_select: Callable[[str], None],
     refs: dict,
+    on_new: Callable[[], None] | None = None,
 ) -> ft.Control:
     """Left master pane: one dense row per migration (dot, pair, status,
     thin progress). Clicking a row selects it; `refs` registers each row's
@@ -1078,10 +1079,21 @@ def build_run_list(
         )
     ]
     if not snapshots:
+        empty: list[ft.Control] = [
+            ft.Text(i18n.t("dash.empty"), size=13,
+                    color=ft.Colors.with_opacity(0.6, ft.Colors.ON_SURFACE)),
+        ]
+        # The empty text says "start one below" — so give it an actual button
+        # to start from; the menu-bar item alone left nothing where it pointed.
+        if on_new is not None:
+            empty.append(
+                ft.FilledButton(i18n.t("dash.new"), icon=ft.Icons.ADD,
+                                on_click=lambda e: on_new())
+            )
         rows.append(ft.Container(
             padding=ft.Padding(12, 18, 12, 18),
-            content=ft.Text(i18n.t("dash.empty"), size=13,
-                            color=ft.Colors.with_opacity(0.6, ft.Colors.ON_SURFACE)),
+            content=ft.Column(empty, spacing=12,
+                              horizontal_alignment=ft.CrossAxisAlignment.START),
         ))
     for snap in snapshots:
         pct = (snap.processed / snap.total) if snap.total else None
@@ -1262,6 +1274,7 @@ def build_main(
     on_dismiss: Callable[[str], None],
     on_edit: Callable[[], None],
     refs: dict,
+    on_new: Callable[[], None] | None = None,
     folder_counts: dict[str, int] | None = None,
     last_run: dict | None = None,
 ) -> ft.View:
@@ -1272,7 +1285,8 @@ def build_main(
                              folder_counts=folder_counts, last_run=last_run)
     body = ft.Row(
         [
-            build_run_list(i18n, snapshots, selected_key, on_select, refs),
+            build_run_list(i18n, snapshots, selected_key, on_select, refs,
+                           on_new=on_new),
             ft.Container(width=1, bgcolor=_hairline()),
             panel,
         ],

@@ -58,18 +58,44 @@ def test_settings_write_through(backend):
 def test_poll_events_reflects_show_and_quit(backend):
     b, _, _ = backend
     # Nothing pending.
-    assert b.poll_events() == {"show": False, "quit": False}
+    assert b.poll_events() == {"show": False, "quit": False, "daemon_lost": False}
     # A tray show request (set on the daemon) surfaces once (one-shot).
     b._client.request_show()
-    assert b.poll_events() == {"show": True, "quit": False}
-    assert b.poll_events() == {"show": False, "quit": False}
+    assert b.poll_events() == {"show": True, "quit": False, "daemon_lost": False}
+    assert b.poll_events() == {"show": False, "quit": False, "daemon_lost": False}
 
 
 def test_poll_events_degrades_when_daemon_unreachable(backend):
     b, _, _ = backend
-    # Point the client at a dead port: poll_events must not raise.
+    # Point the client at a dead port: poll_events must not raise, and a SINGLE
+    # miss must not yet declare the daemon lost (it may be a transient blip).
     b._client._base = "http://127.0.0.1:1"
-    assert b.poll_events() == {"show": False, "quit": False}
+    assert b.poll_events() == {"show": False, "quit": False, "daemon_lost": False}
+
+
+def test_poll_events_flags_daemon_lost_after_sustained_unreachable(backend):
+    b, _, _ = backend
+    clock = [0.0]
+    b._now = lambda: clock[0]
+    b._client._base = "http://127.0.0.1:1"  # dead
+    assert b.poll_events()["daemon_lost"] is False  # first miss: within grace
+    clock[0] = 2.0
+    assert b.poll_events()["daemon_lost"] is False  # still within grace
+    clock[0] = 10.0
+    assert b.poll_events()["daemon_lost"] is True  # sustained -> lost
+
+
+def test_daemon_lost_clears_when_daemon_returns(backend):
+    b, _, _ = backend
+    clock = [0.0]
+    b._now = lambda: clock[0]
+    good = b._client._base
+    b._client._base = "http://127.0.0.1:1"
+    b.poll_events()
+    clock[0] = 10.0
+    assert b.poll_events()["daemon_lost"] is True
+    b._client._base = good  # daemon reachable again
+    assert b.poll_events()["daemon_lost"] is False
 
 
 def test_cancel_and_dismiss(backend, tmp_path):

@@ -54,6 +54,37 @@ def test_macos_install_remove_round_trip(tmp_path, monkeypatch):
     assert autostart.remove(home=tmp_path) is True
 
 
+def test_macos_plist_carries_gui_app_env_when_known(tmp_path, monkeypatch):
+    # A login-launched daemon has no EEI_GUI_APP unless the plist sets it, which
+    # breaks its tray "Show window". When the app path is discoverable, the
+    # plist must carry it as an environment variable.
+    import plistlib
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(autostart, "_macos_gui_app",
+                        lambda: "/Applications/Email Export Import Tool.app")
+    assert autostart.install(home=tmp_path) is True
+
+    plist = tmp_path / "Library" / "LaunchAgents" / f"{autostart.LABEL}.plist"
+    with open(plist, "rb") as fh:
+        data = plistlib.load(fh)
+    assert data["EnvironmentVariables"]["EEI_GUI_APP"] == \
+        "/Applications/Email Export Import Tool.app"
+
+
+def test_macos_plist_omits_gui_app_env_when_unknown(tmp_path, monkeypatch):
+    import plistlib
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(autostart, "_macos_gui_app", lambda: None)
+    assert autostart.install(home=tmp_path) is True
+
+    plist = tmp_path / "Library" / "LaunchAgents" / f"{autostart.LABEL}.plist"
+    with open(plist, "rb") as fh:
+        data = plistlib.load(fh)
+    assert "EnvironmentVariables" not in data  # nothing to inject from source
+
+
 def test_linux_install_remove_round_trip(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
 

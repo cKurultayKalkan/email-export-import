@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.26 — 2026-07-16
+
+### Fixed
+- **The red-X "does nothing" / frozen leftover window (macOS).** With
+  `prevent_close` set, macOS deferred the close to Python, which then exited
+  without ever closing the window — leaving the Flutter window orphaned on
+  screen as a frozen ghost. The window now closes natively (no `prevent_close`),
+  so its Flutter client tears down cleanly and the process follows.
+- **Multiple tray icons / orphaned daemons.** The daemon is now a strict
+  single instance: it holds a lifetime lock and a second daemon exits before it
+  can ever create a rival tray icon. The rendezvous file is only removed by the
+  daemon that owns it, so a stopping process can no longer orphan a live one.
+- **Tray "Quit" leaving the window on screen.** Quit now waits for the GUI to
+  exit before the daemon stops, and the GUI also exits on its own once the
+  daemon has been unreachable for a few seconds — so nothing lingers.
+- **Empty dashboard now has a working "New migration" button** where the
+  "start one below" hint points (previously the action lived only in the menu).
+
+### Changed
+- The tray "Show window" always launches/focuses the GUI (no stale
+  reveal-a-hidden-window path); a transient daemon ping is retried before the
+  rendezvous is treated as stale, avoiding needless respawns.
+- A login-launched daemon now carries `EEI_GUI_APP` so its "Show window" works.
+
 ## v0.1.25 — 2026-07-16
 
 ### Fixed
