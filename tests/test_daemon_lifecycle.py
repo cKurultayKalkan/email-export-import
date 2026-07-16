@@ -131,20 +131,13 @@ def test_ensure_external_copy_is_idempotent_and_updates_on_new_build(tmp_path):
     assert dst.read_bytes() == b"BINARYv1-LONGER"
 
 
-def test_gui_command_opens_by_bundle_id_on_macos(monkeypatch):
-    # On macOS the tray launches the GUI by BUNDLE ID (open -b), so a fresh
-    # LaunchServices launch avoids the stale App-Translocation path (gray window).
+def test_gui_command_opens_the_stable_app_path_on_macos(monkeypatch):
+    # macOS reopens the GUI by its direct (stable) path — NOT `open -b <id>`,
+    # which is ambiguous when the bundle id is registered to several stale copies.
     monkeypatch.setattr(lifecycle.sys, "platform", "darwin")
     monkeypatch.setenv("EEI_GUI_APP", "/Applications/Email Export Import Tool.app")
-    monkeypatch.setattr(lifecycle, "_macos_bundle_id", lambda app: "com.example.eei")
-    assert lifecycle.gui_command() == ["open", "-b", "com.example.eei"]
-
-
-def test_gui_command_falls_back_to_path_when_bundle_id_unknown(monkeypatch):
-    monkeypatch.setattr(lifecycle.sys, "platform", "darwin")
-    monkeypatch.setenv("EEI_GUI_APP", "/some/Where/App.app")
-    monkeypatch.setattr(lifecycle, "_macos_bundle_id", lambda app: None)
-    assert lifecycle.gui_command() == ["open", "/some/Where/App.app"]
+    assert lifecycle.gui_command() == [
+        "open", "/Applications/Email Export Import Tool.app"]
 
 
 def test_gui_command_uses_gui_exe_on_windows(monkeypatch, tmp_path):

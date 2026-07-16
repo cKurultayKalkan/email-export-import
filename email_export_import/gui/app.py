@@ -154,14 +154,15 @@ def _report_startup_crash(page: ft.Page, tb: str) -> None:
         pass
 
 
-def _splash_view(message: str) -> ft.View:
+def _splash_view(text_control: ft.Text) -> ft.View:
     """Shown instantly at launch so the window is never blank while we connect
-    to (or cold-start + spawn) the daemon, which can take several seconds."""
+    to (or cold-start + spawn) the daemon, which can take several seconds on a
+    first launch. The caller holds `text_control` to rotate progress messages so
+    the wait reads as progress, not a hang."""
     return ft.View(
         controls=[
             ft.Column(
-                [ft.ProgressRing(width=44, height=44),
-                 ft.Text(message, size=13)],
+                [ft.ProgressRing(width=44, height=44), text_control],
                 alignment=ft.MainAxisAlignment.CENTER,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 spacing=16, expand=True,
@@ -180,9 +181,29 @@ def _page_main(page: ft.Page) -> None:
         # event loop — asyncio.to_thread yields the loop so this splash frame
         # actually reaches the client. Doing connect_or_spawn inline on the loop
         # thread instead left the window blank for several seconds on cold start.
+        splash_text = ft.Text(i18n.t("app.starting"), size=13)
         page.views.clear()
-        page.views.append(_splash_view(i18n.t("app.starting")))
+        page.views.append(_splash_view(splash_text))
         page.update()
+
+        boot_done = {"v": False}
+        stages = [i18n.t("app.starting"), i18n.t("splash.waking"),
+                  i18n.t("splash.connecting"), i18n.t("splash.almost")]
+
+        async def _ticker() -> None:
+            # Rotate the message during a long first-launch cold start so the
+            # spinner reads as progress rather than a hang on one static word.
+            i = 1
+            while not boot_done["v"]:
+                await asyncio.sleep(2.2)
+                if boot_done["v"]:
+                    break
+                splash_text.value = stages[i % len(stages)]
+                try:
+                    splash_text.update()
+                except Exception:
+                    pass
+                i += 1
 
         async def _boot() -> None:
             try:
@@ -192,7 +213,10 @@ def _page_main(page: ft.Page) -> None:
             except Exception:  # noqa: BLE001
                 applog.log("gui", "startup crash:\n" + traceback.format_exc())
                 _report_startup_crash(page, traceback.format_exc())
+            finally:
+                boot_done["v"] = True
 
+        page.run_task(_ticker)
         page.run_task(_boot)
     except Exception:  # noqa: BLE001
         _report_startup_crash(page, traceback.format_exc())

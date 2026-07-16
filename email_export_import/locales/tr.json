@@ -1,6 +1,9 @@
 {
   "app.title": "Email Export Import Tool",
   "app.starting": "Başlatılıyor…",
+  "splash.waking": "Arka plan servisi uyandırılıyor…",
+  "splash.connecting": "Bağlanılıyor…",
+  "splash.almost": "Neredeyse hazır…",
   "status.running": "Çalışıyor",
   "status.queued": "Sırada",
   "status.paused": "Duraklatıldı",
@@ -139,7 +142,7 @@
   "panel.dest": "Hedef",
   "tray.status": "{count} taşıma çalışıyor",
   "tray.idle": "Aktarım yok",
-  "tray.run_line": "{title} · {done}/{total} · {mins}dk",
+  "tray.run_line": "{dest} · {done}/{total} · {dur}",
   "about.body": "Sürüm {version}\n\nBir posta kutusunu IMAP sunucuları arasında taşır — klasörler, işaretler, tarihler ve ekler korunur.",
   "about.github": "GitHub sayfası",
   "close.confirm_title": "Taşımalar hâlâ çalışıyor",

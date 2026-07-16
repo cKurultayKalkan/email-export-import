@@ -46,23 +46,37 @@ def _unlink_if_mine(path: Path, pid: int) -> None:
         path.unlink(missing_ok=True)
 
 
+def _fmt_duration(secs: float) -> str:
+    """Human-readable elapsed time: 42m / 3h 5m / 2d 4h."""
+    m = int(max(0.0, secs) // 60)
+    if m < 60:
+        return f"{m}m"
+    h, m = divmod(m, 60)
+    if h < 24:
+        return f"{h}h {m}m"
+    d, h = divmod(h, 24)
+    return f"{d}d {h}h"
+
+
 def _build_run_lines(snaps, started_ats: dict, now: float, line_fmt: str) -> list[str]:
-    """One tray line per ACTIVE run — 'title · done/total · Nm' — so the user
-    sees progress by clicking the tray, without opening the window. started_ats
-    maps key → first-start epoch for a live "running for N minutes"; a missing
-    value yields 0. Pure/for-testing: the daemon feeds it live snapshots."""
+    """One tray line per ACTIVE run — 'dest · done/total · elapsed' — so the user
+    sees progress by clicking the tray, without opening the window. Shows only
+    the DESTINATION (enough to tell runs apart) and a human-readable elapsed time
+    counted from THIS session's start (started_ats[key], the Run's own clock, not
+    the pause-spanning first-start). Pure/for-testing."""
     lines: list[str] = []
     for s in snaps:
         if s.status not in ("running", "stopping", "queued"):
             continue
         started = started_ats.get(s.key)
-        mins = int(max(0.0, now - started) / 60) if started else 0
+        dur = _fmt_duration(now - started) if started else "—"
+        dest = s.title.split("→")[-1].strip() if "→" in s.title else s.title
         total = f"{s.total:,}" if s.total else "?"
         try:
-            lines.append(line_fmt.format(title=s.title, done=f"{s.processed:,}",
-                                         total=total, mins=mins))
+            lines.append(line_fmt.format(dest=dest, done=f"{s.processed:,}",
+                                         total=total, dur=dur))
         except Exception:
-            lines.append(f"{s.title} {s.processed}/{s.total}")
+            lines.append(f"{dest} {s.processed}/{s.total}")
     return lines
 
 
@@ -105,7 +119,7 @@ def main(base_dir: Path | None = None) -> None:
     open_label, quit_label = "Show window", "Quit"
     status_tmpl = "{count} migrations running"
     idle_text = APP_TITLE
-    line_fmt = "{title} · {done}/{total} · {mins}m"
+    line_fmt = "{dest} · {done}/{total} · {dur}"
     try:
         from ..gui.i18n import I18n
         i18n = I18n()
@@ -135,9 +149,11 @@ def main(base_dir: Path | None = None) -> None:
         return idle_text
 
     def _status_lines() -> list[str]:
-        # One line per active run (progress + minutes), refreshed each menu open.
+        # One line per active run (progress + elapsed), refreshed each menu open.
+        # Uses the Run's own session clock (started_wall), not state.started_at
+        # which spans pauses and over-counts after a resume.
         snaps = manager.snapshot_all()
-        started = {s.key: (r.state.started_at if (r := manager.get(s.key)) else None)
+        started = {s.key: (r.started_wall if (r := manager.get(s.key)) else None)
                    for s in snaps}
         return _build_run_lines(snaps, started, time.time(), line_fmt)
 

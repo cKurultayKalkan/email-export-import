@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.29 — 2026-07-16
+
+### Fixed
+- **Blank "Show window" on macOS.** Reopening the GUI used `open -b <bundle id>`,
+  which on a machine where the same bundle id is registered to several stale
+  copies (DMG mounts, build dirs) launched an ambiguous/dead one — a blank
+  window. It now reopens by the direct install path, and a translocated launch
+  path is resolved back to `/Applications` so reopen always targets the real
+  app. (This also fixes tray "Quit" leaving that dead blank window on screen — a
+  properly reopened window responds to Quit.)
+
+### Changed
+- **The tray migration line** now shows only the destination and a
+  human-readable elapsed time (e.g. `14h 37m`), counted from the current
+  session's start — not the pause-spanning first-start that read as a huge
+  raw minute count.
+- **The startup splash rotates messages** (Starting → Waking the background
+  service → Connecting → Almost ready) so a long first-launch cold start reads
+  as progress instead of a hang.
+
 ## v0.1.28 — 2026-07-16
 
 ### Fixed

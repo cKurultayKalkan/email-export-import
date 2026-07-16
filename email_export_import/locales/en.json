@@ -1,6 +1,9 @@
 {
   "app.title": "Email Export Import Tool",
   "app.starting": "Starting…",
+  "splash.waking": "Waking the background service…",
+  "splash.connecting": "Connecting…",
+  "splash.almost": "Almost ready…",
   "status.running": "Running",
   "status.queued": "Queued",
   "status.paused": "Paused",
@@ -139,7 +142,7 @@
   "panel.dest": "Destination",
   "tray.status": "{count} migrations running",
   "tray.idle": "No migrations running",
-  "tray.run_line": "{title} · {done}/{total} · {mins}m",
+  "tray.run_line": "{dest} · {done}/{total} · {dur}",
   "about.body": "Version {version}\n\nMoves a whole mailbox between IMAP servers — folders, flags, dates and attachments preserved.",
   "about.github": "GitHub page",
   "close.confirm_title": "Migrations are still running",

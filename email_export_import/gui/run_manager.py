@@ -3,6 +3,7 @@ snapshot). Deliberately flet-free so every path is unit-testable headless."""
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -74,6 +75,10 @@ class Run:
         self._result: TransferProgress | None = None
         self._error: tuple[str, str] | None = None
         self._spool_pending: int | None = None
+        # Wall-clock start of THIS session (set on start()), for a live "running
+        # for N" in the tray. Distinct from state.started_at, which is the
+        # first-ever start and spans pauses (so it over-counts after a resume).
+        self._started_wall: float | None = None
 
     @classmethod
     def placeholder(cls, state: MigrationState, state_dir: Path | None = None) -> "Run":
@@ -106,6 +111,11 @@ class Run:
         return self._thread is not None and self._thread.is_alive()
 
     @property
+    def started_wall(self) -> float | None:
+        """Wall-clock time this session started running (None until start())."""
+        return self._started_wall
+
+    @property
     def state(self) -> MigrationState:
         return self._state
 
@@ -119,6 +129,7 @@ class Run:
             self._cancel = threading.Event()
             self._result = None
             self._error = None
+            self._started_wall = time.time()  # this session's clock
 
         src_email = self._src_conn.account.email
         dst_email = self._dst_conn.account.email

@@ -17,7 +17,16 @@ def test_available_returns_bool_without_raising():
     assert isinstance(trayapp.available(), bool)
 
 
-def test_build_run_lines_formats_active_runs_only():
+def test_fmt_duration_is_human_readable():
+    from email_export_import.daemon.__main__ import _fmt_duration
+
+    assert _fmt_duration(42 * 60) == "42m"
+    assert _fmt_duration(3 * 3600 + 5 * 60) == "3h 5m"
+    assert _fmt_duration(2 * 86400 + 4 * 3600) == "2d 4h"
+    assert _fmt_duration(877 * 60) == "14h 37m"  # the reported raw "877m"
+
+
+def test_build_run_lines_shows_dest_only_and_readable_elapsed():
     from email_export_import.daemon.__main__ import _build_run_lines
     from email_export_import.gui.run_manager import RunSnapshot
 
@@ -30,12 +39,12 @@ def test_build_run_lines_formats_active_runs_only():
                     processed=0, total=0, current_folder=None),
     ]
     started = {"a": 1000.0, "c": None}
-    fmt = "{title} · {done}/{total} · {mins}m"
+    fmt = "{dest} · {done}/{total} · {dur}"
     lines = _build_run_lines(snaps, started, now=1000.0 + 34 * 60, line_fmt=fmt)
 
     assert len(lines) == 2  # running + queued; the done run is excluded
-    assert lines[0] == "a@x → b@y · 10,000/29,000 · 34m"  # thousands + minutes
-    assert lines[1] == "e → f · 0/? · 0m"  # total 0 -> "?", no start -> 0m
+    assert lines[0] == "b@y · 10,000/29,000 · 34m"  # DEST only, thousands, elapsed
+    assert lines[1] == "f · 0/? · —"  # queued, total 0 -> "?", no start -> em dash
 
 
 def test_run_declines_without_a_backend(monkeypatch):
