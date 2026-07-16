@@ -15,6 +15,15 @@ class DaemonError(Exception):
     """Any non-2xx response or transport failure from the daemon."""
 
 
+# Connect / login / folder-scan run behind a spinner and can legitimately take
+# tens of seconds on a slow link or a rate-limiting server (Yandex login
+# backoff). A short HTTP timeout would give up early and mislabel it "timed
+# out", even masking the real error (e.g. a bad password the daemon would have
+# reported). These operations get a generous ceiling; the daemon still enforces
+# its own per-socket IMAP timeouts underneath.
+SLOW_OP_TIMEOUT = 180.0
+
+
 class DaemonClient:
     def __init__(self, base_url: str, token: str, timeout: float = 5.0) -> None:
         self._base = base_url.rstrip("/")
@@ -87,7 +96,8 @@ class DaemonClient:
         self._request("POST", "/settings", settings)
 
     def test_connection(self, account: dict) -> dict:
-        return self._request("POST", "/test-connection", {"account": account})
+        return self._request("POST", "/test-connection", {"account": account},
+                             timeout=SLOW_OP_TIMEOUT)
 
     def add_placeholder(self, src_email: str, dst_email: str) -> str:
         return self._request("POST", "/placeholder",
@@ -103,7 +113,8 @@ class DaemonClient:
         """Connect + build a folder plan. src/dst carry the password in memory
         only — the daemon holds the live connections until start()."""
         return self._request("POST", "/plan",
-                             {"src": src, "dst": dst, "skip": skip})
+                             {"src": src, "dst": dst, "skip": skip},
+                             timeout=SLOW_OP_TIMEOUT)
 
     def start(self, plan_id: str, skip: list, workers: int,
               spool: bool = False) -> dict:

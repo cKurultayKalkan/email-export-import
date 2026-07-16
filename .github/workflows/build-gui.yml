@@ -58,12 +58,18 @@ jobs:
           # it owns the persistent tray icon — so it must bundle pystray + PIL
           # (all OSes) and the pyobjc frameworks pystray needs on macOS.
           COLLECT="--collect-all pystray --collect-all PIL"
+          WINDOWMODE=""
           if [ "$RUNNER_OS" = "macOS" ]; then
             COLLECT="$COLLECT --collect-all objc --collect-all AppKit --collect-all Foundation --collect-all CoreFoundation"
           fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # The daemon is a headless tray app — build it for the GUI subsystem
+            # so Windows never pops a black console window alongside the app.
+            WINDOWMODE="--noconsole"
+          fi
           # PyInstaller one-file; absolute-import launcher keeps the package
           # context intact in the frozen build.
-          uv run --with pyinstaller pyinstaller --onefile --name eei-daemon \
+          uv run --with pyinstaller pyinstaller --onefile $WINDOWMODE --name eei-daemon \
             --paths . $COLLECT \
             --collect-data email_export_import \
             --hidden-import keyring.backends.macOS \

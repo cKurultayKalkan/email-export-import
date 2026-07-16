@@ -13,17 +13,19 @@ from typing import Callable
 
 
 def _envelope_image(size: int = 44):
-    """A white envelope glyph; on macOS it is marked as a template image so the
-    OS recolors it to match the menu bar."""
+    """A filled BLUE envelope. A plain white/monochrome glyph was invisible on a
+    light Windows tray; a saturated blue body with a white flap and outline
+    stands out on both light (Windows) and dark (macOS) menu bars."""
     from PIL import Image, ImageDraw
 
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
+    blue = (37, 99, 235, 255)
     white = (255, 255, 255, 255)
     m = size // 8
     top, bottom = size // 4, size - size // 4
     d.rounded_rectangle([m, top, size - m, bottom], radius=size // 12,
-                        outline=white, width=3)
+                        fill=blue, outline=white, width=2)
     mid = (top + bottom) // 2 + 1
     d.line([m + 2, top + 2, size // 2, mid], fill=white, width=3)
     d.line([size // 2, mid, size - m - 2, top + 2], fill=white, width=3)

@@ -145,3 +145,13 @@ def test_gui_command_falls_back_to_path_when_bundle_id_unknown(monkeypatch):
     monkeypatch.setenv("EEI_GUI_APP", "/some/Where/App.app")
     monkeypatch.setattr(lifecycle, "_macos_bundle_id", lambda app: None)
     assert lifecycle.gui_command() == ["open", "/some/Where/App.app"]
+
+
+def test_gui_command_uses_gui_exe_on_windows(monkeypatch, tmp_path):
+    # On Windows the daemon relaunches the GUI via the exe the GUI handed it
+    # (EEI_GUI_EXE), NOT the frozen daemon binary (which would re-run itself).
+    monkeypatch.setattr(lifecycle.sys, "platform", "win32")
+    gui_exe = tmp_path / "Email Export Import Tool.exe"
+    gui_exe.write_text("x")
+    monkeypatch.setenv("EEI_GUI_EXE", str(gui_exe))
+    assert lifecycle.gui_command() == [str(gui_exe)]

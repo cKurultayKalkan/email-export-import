@@ -135,6 +135,13 @@ def gui_command() -> list[str]:
             if bid:
                 return ["open", "-b", bid]
             return ["open", str(app)]
+    # Non-macOS packaged app: the GUI handed the daemon its own frozen launcher
+    # via EEI_GUI_EXE, so Show window relaunches the REAL GUI. Without it the
+    # fallbacks below hit the frozen daemon binary (sys.executable here), which
+    # ignores `-c` and just re-runs the daemon — so the window never appears.
+    gui_exe = os.environ.get("EEI_GUI_EXE")
+    if gui_exe and Path(gui_exe).exists():
+        return [gui_exe]
     exe = Path(sys.executable)
     # The GUI entry point — NOT `email-export-import`, which is the CLI wizard.
     gui_name = ("email-export-import-gui.exe" if sys.platform == "win32"
@@ -192,17 +199,22 @@ def _spawn(base_dir: Path) -> None:
     env = dict(os.environ)
     if base_dir is not None:
         env["EEI_BASE_DIR"] = str(base_dir)
-    # Tell the (out-of-bundle) daemon where the GUI app is, so its tray can
-    # launch/focus it with `open <app>`.
+    # Tell the (out-of-bundle) daemon how to relaunch the GUI for tray "Show
+    # window". macOS: the .app path (→ open -b <bundle id>). Windows/Linux: the
+    # GUI's own frozen launcher, so the daemon doesn't fall back to re-running
+    # its own binary. Skip a plain python interpreter (source runs), which is not
+    # the GUI and would open a bare REPL.
+    exe = Path(sys.executable)
     if sys.platform == "darwin":
-        exe = Path(sys.executable)
         for p in exe.parents:
             if p.suffix == ".app":
                 env["EEI_GUI_APP"] = str(p)
                 break
+    elif "python" not in exe.name.lower():
+        env["EEI_GUI_EXE"] = str(exe)
     cmd = daemon_command(base_dir)
-    applog.log("gui", f"spawning daemon cmd={cmd} gui_app={env.get('EEI_GUI_APP')}",
-               base_dir)
+    applog.log("gui", f"spawning daemon cmd={cmd} gui_app={env.get('EEI_GUI_APP')} "
+               f"gui_exe={env.get('EEI_GUI_EXE')}", base_dir)
     kwargs = {}
     if sys.platform == "win32":
         # Detach from the GUI's console/process group so it survives the GUI

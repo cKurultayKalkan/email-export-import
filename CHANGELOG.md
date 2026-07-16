@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.28 — 2026-07-16
+
+### Fixed
+- **"Timed out" on connect / resume — even with the correct password** (all
+  platforms, most visible on Windows). The GUI→daemon call for connect and
+  folder-scan had a 5-second HTTP timeout, far too short for a real IMAP login
+  over a slow link, so it gave up early and reported "timed out" — masking the
+  true result, including a wrong password. These operations now allow up to 180s.
+- **Black console window opening alongside the app on Windows.** The headless
+  daemon sidecar is now built for the GUI subsystem (`--noconsole`).
+- **"Show window" doing nothing on Windows.** The daemon now relaunches the
+  actual GUI executable (handed to it via `EEI_GUI_EXE`) instead of re-running
+  its own binary.
+
+### Changed
+- **Tray icon is now blue** — the old monochrome glyph was invisible on a light
+  Windows system tray.
+
+_Investigating: a blank white delay before the "Starting" splash on the first
+Windows launch (Flutter engine init / Defender scan)._
+
 ## v0.1.27 — 2026-07-16
 
 ### Fixed
