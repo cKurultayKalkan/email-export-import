@@ -142,6 +142,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._server.request_show()
             return self._send(200, {"ok": True})
 
+        if self.path == "/gui-gone":
+            self._server.note_gui_gone()
+            return self._send(200, {"ok": True})
+
         if self.path == "/shutdown":
             self._send(200, {"ok": True})
             self._server.request_stop()
@@ -265,6 +269,13 @@ class DaemonServer:
     # ---- GUI coordination ----
     def note_gui_seen(self) -> None:
         self._gui_seen = time.monotonic()
+
+    def note_gui_gone(self) -> None:
+        """The GUI told us it is exiting (window closed). Flip gui_alive False at
+        once so the NEXT tray "Show window" launches a fresh GUI instead of the
+        just-launched one bowing out to a heartbeat that hasn't decayed yet (the
+        "have to click Show twice" bug)."""
+        self._gui_seen = 0.0
 
     def gui_alive(self, within: float = 4.0) -> bool:
         """True if a GUI heartbeated recently — so a launch/tray-open can reveal

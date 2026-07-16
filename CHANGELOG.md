@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here.
 
+## v0.1.30 — 2026-07-16
+
+### Fixed
+- **"Show window" needing two clicks** (macOS). Right after closing, the just-
+  exited GUI's heartbeat hadn't decayed yet, so the first relaunch's
+  single-instance guard thought a GUI was still alive and bowed out (no window);
+  the second click, past the decay window, worked. The GUI now signals the
+  daemon (`/gui-gone`) as it closes, flipping `gui_alive` False immediately — so
+  the very first "Show window" launches a fresh GUI.
+
 ## v0.1.29 — 2026-07-16
 
 ### Fixed

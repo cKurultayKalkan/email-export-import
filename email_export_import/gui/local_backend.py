@@ -59,6 +59,9 @@ class LocalBackend:
         DaemonBackend so app.py's poll treats both alike, but nothing to lose."""
         return {"show": False, "quit": False, "daemon_lost": False}
 
+    def notify_closing(self) -> None:
+        """Parity no-op: no out-of-process daemon to tell in local mode."""
+
     def config_for(self, key: str) -> dict | None:
         run = self._manager.get(key)
         return run.state.config if run else None

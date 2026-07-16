@@ -134,6 +134,15 @@ class DaemonBackend:
         except Exception:
             pass
 
+    def notify_closing(self) -> None:
+        """Tell the daemon this viewer is exiting so gui_alive() flips False at
+        once — the next tray "Show window" then launches a fresh GUI instead of
+        having it bow out to a not-yet-decayed heartbeat. Best-effort."""
+        try:
+            self._client.gui_gone()
+        except Exception:
+            pass
+
     def active_count(self) -> int:
         return sum(1 for d in self._last
                    if d.get("status") in ("running", "stopping"))

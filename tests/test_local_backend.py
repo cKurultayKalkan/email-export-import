@@ -43,6 +43,13 @@ def test_poll_events_is_always_empty(backend):
     assert b.poll_events() == {"show": False, "quit": False, "daemon_lost": False}
 
 
+def test_notify_closing_is_an_inert_noop(backend):
+    # Parity method with DaemonBackend: local mode has no daemon to tell, so it
+    # must exist and simply do nothing (never raise).
+    b, _, _ = backend
+    assert b.notify_closing() is None
+
+
 def test_connection_ok_and_auth_failure(backend, monkeypatch):
     from email_export_import import connection
     from tests.fakes import FakeIMAPClient

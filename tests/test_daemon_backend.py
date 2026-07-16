@@ -85,6 +85,14 @@ def test_poll_events_flags_daemon_lost_after_sustained_unreachable(backend):
     assert b.poll_events()["daemon_lost"] is True  # sustained -> lost
 
 
+def test_notify_closing_flips_gui_alive_at_once(backend):
+    b, _, _ = backend
+    b.poll_events()  # /events heartbeat marks the GUI alive
+    assert b._client.gui_alive() is True
+    b.notify_closing()  # closing must flip it False immediately (no 4s decay)
+    assert b._client.gui_alive() is False
+
+
 def test_daemon_lost_clears_when_daemon_returns(backend):
     b, _, _ = backend
     clock = [0.0]

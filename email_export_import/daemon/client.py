@@ -82,6 +82,10 @@ class DaemonClient:
     def request_show(self) -> None:
         self._request("POST", "/request-show")
 
+    def gui_gone(self) -> None:
+        """Tell the daemon this GUI is exiting, so gui_alive() flips False now."""
+        self._request("POST", "/gui-gone", timeout=1.5)
+
     # ---- controls ----
     def pause(self, key: str) -> None:
         self._request("POST", f"/runs/{key}/pause")

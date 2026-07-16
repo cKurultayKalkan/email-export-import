@@ -289,6 +289,10 @@ def _run_app(page: ft.Page, backend, i18n: I18n, _prefs: dict) -> None:
         versions, so we never rely on it alone)."""
         applog.log("gui", f"close viewer: {reason}")
         try:
+            backend.notify_closing()  # flip daemon gui_alive False now
+        except Exception:
+            pass
+        try:
             page.run_task(page.window.close)
         except Exception:
             pass
@@ -316,6 +320,10 @@ def _run_app(page: ft.Page, backend, i18n: I18n, _prefs: dict) -> None:
                 str(getattr(etype, "value", etype)).lower() == "close"
             if is_close:
                 applog.log("gui", "window close -> exit viewer (daemon keeps running)")
+                try:
+                    backend.notify_closing()  # so the next Show launches fresh
+                except Exception:
+                    pass
                 # The window is already closing natively; let Flutter finish its
                 # teardown, then make sure Python exits too (no window-less
                 # lingering process). A ghost is impossible here.
